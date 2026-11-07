@@ -1,0 +1,908 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Portefeuille</title>
+<style>
+/* Jetons de couleur : palette de référence du guide de visualisation. Le sombre est
+   choisi pas à pas pour sa surface, jamais une inversion automatique du clair. */
+:root {
+  color-scheme: light;
+  --plan: #f9f9f7; --surface: #fcfcfb; --surface-2: #f0efec;
+  --encre: #0b0b0b; --encre-2: #52514e; --muet: #898781;
+  --grille: #e1e0d9; --axe: #c3c2b7; --bord: rgba(11,11,11,0.10);
+  --serie-1: #2a78d6; --serie-2: #eb6834;
+  --gain: #2a78d6; --perte: #e34948;
+  --bon: #0ca30c; --alerte: #fab219; --critique: #d03b3b; --texte-gain: #006300; --texte-perte: #b42323;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --plan: #0d0d0d; --surface: #1a1a19; --surface-2: #2c2c2a;
+    --encre: #f0efec; --encre-2: #c3c2b7; --muet: #898781;
+    --grille: #2c2c2a; --axe: #383835; --bord: rgba(255,255,255,0.10);
+    --serie-1: #3987e5; --serie-2: #d95926;
+    --gain: #3987e5; --perte: #e66767; --texte-gain: #0ca30c; --texte-perte: #e66767;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --plan: #0d0d0d; --surface: #1a1a19; --surface-2: #2c2c2a;
+  --encre: #f0efec; --encre-2: #c3c2b7; --muet: #898781;
+  --grille: #2c2c2a; --axe: #383835; --bord: rgba(255,255,255,0.10);
+  --serie-1: #3987e5; --serie-2: #d95926;
+  --gain: #3987e5; --perte: #e66767; --texte-gain: #0ca30c; --texte-perte: #e66767;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--plan); color: var(--encre);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 860px; margin: 0 auto; padding: 16px 16px 48px; }
+h1 { font-size: 20px; margin: 4px 0 2px; }
+h2 { font-size: 16px; margin: 0 0 4px; }
+.sous { color: var(--encre-2); font-size: 13px; }
+.muet { color: var(--muet); font-size: 12.5px; }
+.carte { background: var(--surface); border: 1px solid var(--bord); border-radius: 12px; padding: 14px; margin: 12px 0; }
+.heros-lib { color: var(--encre-2); font-size: 13px; }
+.heros { font-size: 48px; font-weight: 600; line-height: 1.1; margin: 2px 0 10px; }
+.tuiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.tuile { background: var(--surface); border: 1px solid var(--bord); border-radius: 10px; padding: 10px 12px; }
+.tuile .lib { color: var(--encre-2); font-size: 12.5px; }
+.tuile .val { font-size: 20px; font-weight: 600; margin-top: 2px; }
+.tuile .det { color: var(--muet); font-size: 12px; margin-top: 2px; }
+.pos { color: var(--texte-gain); } .neg { color: var(--texte-perte); }
+.note { border-radius: 10px; padding: 10px 12px; margin: 10px 0; font-size: 14px; border: 1px solid var(--bord); background: var(--surface); }
+.note-ok { border-left: 4px solid var(--bon); }
+.note-warn { border-left: 4px solid var(--alerte); }
+.note-crit { border-left: 4px solid var(--critique); }
+button, .btn { font: inherit; font-size: 14px; border-radius: 8px; border: 1px solid var(--bord); background: var(--surface-2);
+  color: var(--encre); padding: 8px 12px; cursor: pointer; display: inline-block; }
+button.accent { background: var(--serie-1); color: #fff; border-color: transparent; }
+select { font: inherit; font-size: 13px; background: var(--surface); color: var(--encre); border: 1px solid var(--bord); border-radius: 6px; padding: 3px 4px; }
+.rang { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+textarea { width: 100%; min-height: 90px; font: 12px/1.3 ui-monospace, monospace; background: var(--surface); color: var(--encre);
+  border: 1px solid var(--bord); border-radius: 8px; padding: 8px; }
+.graphe { position: relative; width: 100%; }
+.graphe svg { display: block; width: 100%; overflow: visible; touch-action: pan-y; }
+.graphe text { font: 12px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--encre-2); }
+.graphe text.axe-txt { fill: var(--muet); font-variant-numeric: tabular-nums; }
+.graphe text.fort { fill: var(--encre); }
+.bulle { position: absolute; pointer-events: none; background: var(--surface); color: var(--encre); border: 1px solid var(--bord);
+  border-radius: 8px; padding: 6px 9px; font-size: 12.5px; box-shadow: 0 4px 14px rgba(0,0,0,0.18); white-space: nowrap; z-index: 2; display: none; }
+.legende { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12.5px; color: var(--encre-2); margin: 4px 0 8px; }
+.legende i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: right; padding: 6px 6px; border-bottom: 1px solid var(--grille); font-variant-numeric: tabular-nums; vertical-align: top; }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--encre-2); font-weight: 600; font-size: 12px; }
+.defile { overflow-x: auto; }
+details summary { cursor: pointer; color: var(--encre-2); font-size: 13.5px; margin-top: 8px; }
+.cache { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Portefeuille</h1>
+  <div class="sous" id="entete">Aucune capture reçue.</div>
+  <div id="alerte-stockage"></div>
+  <div id="reception"></div>
+
+  <section id="v-synthese"></section>
+
+  <section class="carte" id="c-evolution">
+    <h2>Évolution de la valeur</h2>
+    <div class="muet" id="evolution-sous"></div>
+    <div class="legende" id="evolution-legende"></div>
+    <div class="graphe" id="g-evolution"></div>
+    <details><summary>Valeurs</summary><div class="defile" id="t-evolution"></div></details>
+  </section>
+
+  <section class="carte" id="c-repartition">
+    <h2>Répartition par ligne</h2>
+    <div class="muet">Part de chaque titre dans la valeur des titres, de la plus grosse à la plus petite.</div>
+    <div class="graphe" id="g-repartition"></div>
+  </section>
+
+  <section class="carte" id="c-plusvalues">
+    <h2>Plus-values latentes par ligne</h2>
+    <div class="muet">Gain ou perte depuis l'achat, en euros, change compris (comme DEGIRO). Bleu : gain · rouge : perte.</div>
+    <div class="graphe" id="g-plusvalues"></div>
+  </section>
+
+  <section class="carte" id="c-positions">
+    <h2>Positions</h2>
+    <div class="defile" id="t-positions"></div>
+  </section>
+
+  <section class="carte" id="c-releve">
+    <h2>Relevé de compte</h2>
+    <div class="muet">Le relevé DEGIRO (fichier CSV) donne vos versements et retraits — c'est lui qui permet le XIRR, le rendement annuel de votre
+      argent — ainsi que les dividendes, impôts, frais et opérations de change. Importez-le une fois depuis l'ouverture du compte ; ensuite, après
+      chaque versement ou retrait, importez un relevé récent : les mouvements déjà connus ne sont pas comptés deux fois.</div>
+    <div id="releve-etat"></div>
+    <div class="rang">
+      <label class="btn">Importer un relevé (CSV)<input type="file" accept=".csv,text/csv,text/comma-separated-values" multiple id="f-releve" class="cache"></label>
+    </div>
+  </section>
+
+  <section class="carte">
+    <h2>Captures</h2>
+    <div id="captures-etat" class="muet"></div>
+    <div class="rang">
+      <button id="b-coller">Coller une capture</button>
+      <label class="btn">Importer des captures archivées (.txt)<input type="file" accept=".txt,text/plain" multiple id="f-captures" class="cache"></label>
+    </div>
+    <div id="zone-collage" class="cache">
+      <textarea id="t-collage" placeholder="Collez ici le document de la macro (===VIGIE:META=== …)"></textarea>
+      <div class="rang"><button class="accent" id="b-integrer">Intégrer</button></div>
+    </div>
+    <details>
+      <summary>Sauvegarde et réglages</summary>
+      <div class="rang">
+        <button id="b-sauver">Télécharger une sauvegarde</button>
+        <label class="btn">Restaurer une sauvegarde<input type="file" accept=".json,application/json" id="f-restaurer" class="cache"></label>
+        <button id="b-theme">Thème : auto</button>
+        <button id="b-effacer">Tout effacer</button>
+      </div>
+      <div class="muet" style="margin-top:6px">Toutes les données restent dans ce navigateur, sur cet appareil. Rien n'est envoyé nulle part.</div>
+    </details>
+  </section>
+</main>
+
+<script id="moteur">
+'use strict';
+/* =====================================================================
+   MOTEUR — lecture des captures et du relevé, calculs. Aucune dépendance au
+   navigateur : ce bloc est aussi exécuté tel quel par outillage/tester.js.
+   ===================================================================== */
+const Cst_AgeMaxCaptureMin = 15;
+const Cst_ReIsin = /\b([A-Z]{2}[A-Z0-9]{9}\d)\b/;
+const Cst_Esp = '[\\s\\u00a0\\u202f]';
+
+/* UN MONTANT. Les deux écritures existent : « 1 234,56 » ou « 1.234,56 » (français),
+   « 1,234.56 » ou « 1234.56 » (anglais, relevé exporté en anglais). Le DERNIER
+   séparateur est la décimale ; un séparateur répété ne l'est jamais. Un texte qui
+   n'est pas un nombre rend null — jamais un nombre deviné. */
+function Fn_Nombre(s) {
+  if (s == null) return null;
+  let t = String(s).replace(/[\s  +]/g, '').replace(/[−–]/g, '-');
+  const nv = (t.match(/,/g) || []).length, np = (t.match(/\./g) || []).length;
+  if (nv && np) t = t.lastIndexOf(',') > t.lastIndexOf('.') ? t.replace(/\./g, '').replace(',', '.') : t.replace(/,/g, '');
+  else if (nv > 1) t = t.replace(/,/g, '');
+  else if (nv === 1) t = t.replace(',', '.');
+  else if (np > 1) t = t.replace(/\./g, '');
+  if (!/^-?\d+(\.\d+)?$/.test(t)) return null;
+  return Number(t);
+}
+/* Les nombres d'un fragment de capture, hors pourcentages. Un groupe de milliers fait
+   exactement trois chiffres ; « 18 18 » reste deux nombres. */
+function Fn_Nombres(s) {
+  const out = [];
+  const re = new RegExp('[+\\-−–]?(?:\\d{1,3}(?:' + Cst_Esp + '\\d{3})+|\\d+)(?:,\\d+)?(?![\\d,])(%?)', 'g');
+  let m;
+  while ((m = re.exec(s))) { if (!m[1]) out.push(Fn_Nombre(m[0])); }
+  return out;
+}
+// « 1 307 1 307 » → 1307 : la quantité est écrite deux fois (texte + description d'accessibilité).
+function Fn_QuantiteDoublee(s) {
+  const t = String(s).trim().split(/[\s  ]+/).filter(Boolean);
+  if (!t.length || t.some(x => !/^\d+$/.test(x)) || t.length % 2) return null;
+  const a = t.slice(0, t.length / 2).join(''), b = t.slice(t.length / 2).join('');
+  return a === b ? Number(a) : null;
+}
+// « Nom Nom » → « Nom » (même raison). Rend null si le texte n'est pas un nom doublé.
+function Fn_Dedoubler(mots) {
+  if (mots.length % 2) return null;
+  const a = mots.slice(0, mots.length / 2).join(' '), b = mots.slice(mots.length / 2).join(' ');
+  return a === b ? a : null;
+}
+/* UNE LIGNE DE POSITION (macro v11, écran en paysage) :
+   « Nom Nom TICKER | € 48,25 90 90 ISIN € 48,25 EUR valeur valeur PRU PRU plJ plJ x% x% plLat (y%) plLat (y%) total total »
+   Valeur, plus-values et total sont en EUROS ; cours et PRU dans la devise du titre. */
+function Fn_LirePosition(l) {
+  const mI = Cst_ReIsin.exec(l);
+  if (!mI) return null;
+  const tete = l.slice(0, mI.index), queue = l.slice(mI.index + mI[0].length);
+  const p = tete.indexOf('|');
+  if (p < 0) return null;
+  const mots = tete.slice(0, p).trim().split(/[\s  ]+/);
+  // Le ticker peut tenir en deux mots (« DANI B ») : on retient la coupe qui laisse un nom doublé.
+  let nom = null, ticker = null;
+  for (const k of [1, 2]) {
+    const n = Fn_Dedoubler(mots.slice(0, mots.length - k));
+    if (n) { nom = n; ticker = mots.slice(mots.length - k).join(' '); break; }
+  }
+  if (!nom) { ticker = mots[mots.length - 1]; nom = mots.slice(0, -1).join(' '); }
+  // Cours et devise : lus APRÈS l'ISIN, où ils sont suivis du code devise (« € 48,25 EUR »).
+  const mQ = new RegExp('^' + Cst_Esp + '*(€|\\$|£|[A-Z]{3})' + Cst_Esp + '*(-?[\\d.,\\s\\u00a0\\u202f]+?)' + Cst_Esp + '+([A-Z]{3})' + Cst_Esp + '+(.*)$').exec(queue);
+  if (!mQ) return null;
+  const dev = mQ[3], coursTxt = mQ[2].trim(), cours = Fn_Nombre(coursTxt);
+  const nb = Fn_Nombres(mQ[4]);
+  if (cours == null || nb.length < 9) return null;
+  const valeur = nb[0], pru = nb[2], plJour = nb[4], plLat = nb[6], total = nb[8];
+  if (valeur !== nb[1] || pru !== nb[3] || plLat !== nb[7]) return null;
+  // Quantité : ce qui reste avant l'ISIN, une fois retirés la devise et le cours.
+  const droite = tete.slice(p + 1), iC = droite.indexOf(coursTxt);
+  const qte = iC >= 0 ? Fn_QuantiteDoublee(droite.slice(iC + coursTxt.length)) : null;
+  const fx = (qte && cours) ? (dev === 'EUR' ? 1 : valeur / (qte * cours)) : null;
+  const investi = valeur - plLat;
+  return { isin: mI[1], nom, ticker, dev, cours, qte, valeur, pru, plJour, plLat,
+    plPct: investi > 0 ? plLat / investi * 100 : null, total, fx };
+}
+const Cst_Marge = [
+  ['titres', /^Valeur des titres/], ['cash', /^Liquidit/], ['vl', /^Valeur liquidative/],
+  ['risque', /^Risque du portefeuille/], ['libre', /^Marge disponible/]
+];
+// Le document de la macro : sections ===VIGIE:NOM===.
+function Fn_LireCapture(texte) {
+  const sec = {}; let cle = null;
+  String(texte || '').split(/\r?\n/).forEach(l => {
+    const m = /^===VIGIE:([A-Z]+)===$/.exec(l.trim());
+    if (m) { cle = m[1]; sec[cle] = sec[cle] || []; return; }
+    if (cle) sec[cle].push(l);
+  });
+  if (!sec.META || !sec.POSITIONS) return { erreur: 'Ce texte n’est pas une capture de la macro (bornes ===VIGIE:…=== absentes).' };
+  const meta = {};
+  sec.META.forEach(l => { const i = l.indexOf('='); if (i > 0) meta[l.slice(0, i).trim()] = l.slice(i + 1).trim(); });
+  const positions = [], nonLues = [], marge = {};
+  sec.POSITIONS.forEach(l => {
+    const t = l.trim();
+    if (!t) return;
+    const a = Cst_Marge.find(x => x[1].test(t));
+    if (a) { const n = Fn_Nombres(t.replace(/^[^€]*€/, '')); if (n.length) marge[a[0]] = n[n.length - 1]; return; }
+    if (/^Derni[èe]re mise/.test(t)) return;
+    const p = Fn_LirePosition(t);
+    if (p) positions.push(p); else nonLues.push(t);
+  });
+  // Heure locale du téléphone, telle que la macro l'écrit (« 8:24:29 » avant le correctif du 16/10).
+  const mT = /^(\d{4})-(\d\d)-(\d\d)T(\d\d?):(\d\d):(\d\d)$/.exec(meta.capture || '');
+  const ts = mT ? new Date(+mT[1], +mT[2] - 1, +mT[3], +mT[4], +mT[5], +mT[6]).getTime() : null;
+  return { meta, ts, statut: meta.statut || null, compte: meta.compte || '', positions, nonLues, marge };
+}
+// Contrôle : la somme des lignes doit redonner la valeur des titres de l'écran.
+function Fn_Controle(cap) {
+  const somme = cap.positions.reduce((s, p) => s + (p.valeur || 0), 0);
+  const ecran = cap.marge.titres;
+  return { somme, ecran, ecart: ecran != null ? somme - ecran : null,
+    attendues: Number(cap.meta.lignes_positions) || null, lues: cap.positions.length };
+}
+// Date locale « AAAA-MM-JJ » (jamais toISOString : après minuit, l'heure universelle donne la veille).
+function Fn_Jour(ts) {
+  const d = new Date(ts);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+/* ---------------------------------------------------------------------
+   RELEVÉ DE COMPTE DEGIRO (CSV). Colonnes : Date, Heure, Date de valeur, Produit,
+   Code ISIN, Description, FX, Mouvements (devise), [montant], Solde (devise),
+   [montant], ID Ordre. Chaque mouvement est CLASSÉ ; seuls les versements et
+   retraits — l'argent entre VOUS et le compte — entrent dans le XIRR. Le reste
+   (achats, ventes, dividendes, frais, change, intérêts) se passe DANS le compte :
+   c'est déjà dans sa valeur.
+   --------------------------------------------------------------------- */
+const Cst_Types = {
+  versement: 'Versement', retrait: 'Retrait', achat: 'Achat', vente: 'Vente', dividende: 'Dividende',
+  impot: 'Impôt sur dividende', frais_courtage: 'Frais de courtage', frais_connexion: 'Frais de connexion',
+  frais_change: 'Frais de change', frais: 'Autres frais', interet: 'Intérêts', change: 'Opération de change',
+  interne: 'Transfert interne', regularisation: 'Régularisation (autre)', autre: 'Autre'
+};
+/* L'ORDRE COMPTE : le premier motif reconnu l'emporte. Les transferts internes
+   passent avant tout (une « réservation » de versement suivie du versement réel
+   le compterait deux fois) ; l'impôt avant le dividende (« Impôts sur dividende ») ;
+   les frais de change avant le change ; le change avant le retrait (« FX Withdrawal »
+   est une conversion, pas un retrait). Un versement est positif, un retrait négatif. */
+const Cst_Regles = [
+  ['interne', /cash sweep|transfert (de|vers|depuis|interne)|fonds mon[ée]taires?|money market|r[ée]servation|compte de caisse/i],
+  ['achat', /^(achat|buy)\b/i],
+  ['vente', /^(vente|sell)\b/i],
+  ['impot', /imp[ôo]ts?\b.*dividende|retenue (à la source|fiscale)|withholding|dividend tax|pr[ée]l[èe]vements? sociaux/i],
+  ['dividende', /dividende|dividend|coupon|distribution/i],
+  ['frais_change', /frais[^,]*(change|autofx|conversion)|autofx|fx (fee|cost|charge)/i],
+  ['change', /op[ée]ration de change|change de devises?|conversion de devises?|currency (exchange|debit|credit)|fx (debit|credit|withdrawal|deposit)/i],
+  ['frais_connexion', /frais de connexion|connection fee/i],
+  ['frais_courtage', /courtage|frais de transaction|parties tierces|commission|transaction (fee|costs?)|third part/i],
+  ['interet', /int[ée]r[êe]ts?|interest/i],
+  ['versement', /versement|d[ée]p[ôo]t|deposit|virement|sofort|ideal/i, 1],
+  ['retrait', /retrait|withdrawal|virement/i, -1],
+  ['frais', /frais|fee|costs?|charge/i]
+];
+// Libellé sans chiffres : regroupe « Frais de connexion 2025 » et « … 2026 », clé des corrections manuelles.
+function Fn_Normaliser(desc) { return String(desc || '').replace(/\d[\d.,  ]*/g, '#').replace(/\s+/g, ' ').trim().slice(0, 90); }
+/* RÉGULARISATIONS DU COURTIER : dividende trop perçu repris, impôt corrigé, versement
+   annulé… Elles se rattachent à CE QU'ELLES CORRIGENT, avant toute autre règle : une
+   « Régularisation versement de dividende » lue comme un versement serait comptée dans
+   le XIRR comme de l'argent apporté — c'est l'erreur à ne pas faire. Une régularisation
+   de dividende ou d'impôt reste dans le compte (hors XIRR) ; seule celle d'un versement
+   ou d'un retrait d'argent est un flux, compté avec son signe pour annuler l'original. */
+const Cst_Regul = /r[ée]gul|correction|rectifi|annulation|ajustement|trop[- ]per[çc]u|extourne|storno|reversal|adjustment|redressement/i;
+const Cst_ReImpot = /imp[ôo]ts?\b|retenue|withholding|\btax\b|pr[ée]l[èe]vements? sociaux/i;
+const Cst_ReDividende = /dividend|coupon|distribution/i;
+const Cst_ReFlux = /versement de fonds|d[ée]p[ôo]t|deposit|retrait|withdrawal|virement/i;
+function Fn_Classer(m, corrections) {
+  const n = Fn_Normaliser(m.desc), d = m.desc;
+  if (corrections && corrections[n]) return corrections[n];
+  if (Cst_Regles[0][1].test(d)) return 'interne';
+  if (/^(achat|buy)\b/i.test(d)) return 'achat';
+  if (/^(vente|sell)\b/i.test(d)) return 'vente';
+  if (Cst_Regul.test(d)) {
+    if (Cst_ReImpot.test(d)) return 'impot';
+    if (Cst_ReDividende.test(d)) return 'dividende';
+    if (Cst_ReFlux.test(d)) return m.montant >= 0 ? 'versement' : 'retrait';
+  }
+  for (const [type, re, signe] of Cst_Regles) {
+    if (!re.test(d)) continue;
+    if (signe && Math.sign(m.montant) !== signe) continue;
+    return type;
+  }
+  return Cst_Regul.test(d) ? 'regularisation' : 'autre';
+}
+function Fn_LireCsv(texte) {
+  const s = String(texte || '').replace(/^﻿/, '');
+  const l0 = s.split(/\r?\n/, 1)[0] || '';
+  const sep = (l0.match(/;/g) || []).length > (l0.match(/,/g) || []).length ? ';' : ',';
+  const lignes = []; let champ = '', ligne = [], guillemet = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (guillemet) {
+      if (c === '"') { if (s[i + 1] === '"') { champ += '"'; i++; } else guillemet = false; }
+      else champ += c;
+    } else if (c === '"') guillemet = true;
+    else if (c === sep) { ligne.push(champ); champ = ''; }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && s[i + 1] === '\n') i++;
+      ligne.push(champ); champ = ''; if (ligne.some(x => x !== '')) lignes.push(ligne); ligne = [];
+    } else champ += c;
+  }
+  ligne.push(champ); if (ligne.some(x => x !== '')) lignes.push(ligne);
+  return lignes;
+}
+function Fn_DateCsv(s) {
+  const t = String(s || '').trim();
+  let m = /^(\d{2})[-/.](\d{2})[-/.](\d{4})$/.exec(t);
+  if (m) return m[3] + '-' + m[2] + '-' + m[1];
+  m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t);
+  return m ? t : null;
+}
+function Fn_LireReleve(texte) {
+  const lignes = Fn_LireCsv(texte);
+  if (lignes.length < 2) return { erreur: 'Fichier vide ou illisible.' };
+  const en = lignes[0].map(x => x.trim().toLowerCase());
+  const col = re => en.findIndex(x => re.test(x));
+  const iDate = col(/^(date|datum)$/), iHeure = col(/^(heure|time|tijd)$/), iProd = col(/^(produit|product)$/), iIsin = col(/isin/);
+  const iDesc = col(/^(description|omschrijving)/), iFx = col(/^fx$/), iMvt = col(/^(mouvements?|change|mutatie|variation)/);
+  const iSolde = col(/^(solde|balance|saldo)/), iOrdre = col(/(ordre|order)/);
+  if (iDate < 0 || iDesc < 0 || iMvt < 0) return { erreur: 'Ce fichier n’a pas les colonnes d’un relevé DEGIRO (Date, Description, Mouvements). En-têtes lus : ' + lignes[0].join(' · ') };
+  const mouvements = []; let rejets = 0;
+  lignes.slice(1).forEach(r => {
+    const date = Fn_DateCsv(r[iDate]);
+    const montant = Fn_Nombre(r[iMvt + 1]);
+    if (!date || montant == null) { rejets++; return; }
+    const m = { date, heure: iHeure >= 0 ? (r[iHeure] || '').trim() : '', produit: iProd >= 0 ? (r[iProd] || '').trim() : '',
+      isin: iIsin >= 0 ? (r[iIsin] || '').trim() : '', desc: (r[iDesc] || '').trim(), fx: iFx >= 0 ? Fn_Nombre(r[iFx]) : null,
+      dev: (r[iMvt] || '').trim().toUpperCase(), montant,
+      soldeDev: iSolde >= 0 ? (r[iSolde] || '').trim() : '', solde: iSolde >= 0 ? Fn_Nombre(r[iSolde + 1]) : null,
+      ordre: iOrdre >= 0 ? (r[iOrdre] || '').trim() : '' };
+    m.cle = [m.date, m.heure, m.desc, m.dev, m.montant, m.soldeDev, m.solde, m.ordre].join('|');
+    mouvements.push(m);
+  });
+  if (!mouvements.length) return { erreur: 'Aucun mouvement lisible dans ce fichier.' };
+  return { mouvements, rejets };
+}
+// Fusion de plusieurs relevés : un mouvement déjà connu (même date, heure, libellé, montant ET solde) n'est pas recompté.
+function Fn_Fusionner(existants, nouveaux) {
+  const vus = new Set((existants || []).map(m => m.cle));
+  const ajoutes = nouveaux.filter(m => { if (vus.has(m.cle)) return false; vus.add(m.cle); return true; });
+  const tous = (existants || []).concat(ajoutes).sort((a, b) => (a.date + a.heure) < (b.date + b.heure) ? -1 : (a.date + a.heure) > (b.date + b.heure) ? 1 : 0);
+  return { tous, ajoutes: ajoutes.length };
+}
+// Versements (+) et retraits (−) en euros, jusqu'à une date incluse.
+function Fn_Flux(mouvements, corrections, jusqua) {
+  const out = [], horsEuro = [];
+  (mouvements || []).forEach(m => {
+    if (jusqua && m.date > jusqua) return;
+    const t = Fn_Classer(m, corrections);
+    if (t !== 'versement' && t !== 'retrait') return;
+    (m.dev === 'EUR' ? out : horsEuro).push({ date: m.date, montant: m.montant, desc: m.desc, dev: m.dev });
+  });
+  return { flux: out, horsEuro };
+}
+/* MONTANTS EN EUROS, TIRÉS DU RELEVÉ LUI-MÊME. Chaque opération de change y figure en
+   deux lignes à la même minute : la devise débitée et l'euro crédité (ou l'inverse).
+   Leur rapport est le taux réellement appliqué — aucun taux extérieur n'est consulté.
+   À défaut de paire, la colonne FX de la ligne en devise (1 € = FX devise) sert. */
+function Fn_Taux(mouvements, corrections) {
+  const groupes = {}, taux = [];
+  (mouvements || []).forEach(m => { if (Fn_Classer(m, corrections) === 'change') (groupes[m.date + ' ' + m.heure] = groupes[m.date + ' ' + m.heure] || []).push(m); });
+  Object.values(groupes).forEach(g => {
+    const e = g.filter(m => m.dev === 'EUR'), f = g.filter(m => m.dev !== 'EUR');
+    if (e.length === 1 && f.length === 1 && e[0].montant && f[0].montant && Math.sign(e[0].montant) !== Math.sign(f[0].montant))
+      taux.push({ dev: f[0].dev, date: f[0].date, heure: f[0].heure, r: Math.abs(e[0].montant / f[0].montant) });
+    else f.forEach(x => { if (x.fx > 0) taux.push({ dev: x.dev, date: x.date, heure: x.heure, r: 1 / x.fx }); });
+  });
+  return taux;
+}
+// Contre-valeur en euros d'un mouvement : taux de la conversion la plus proche dans le temps,
+// « approx » quand elle n'a pas eu lieu le même jour. null si la devise n'a jamais été convertie.
+function Fn_EnEuros(m, taux) {
+  if (m.dev === 'EUR') return { v: m.montant, approx: false };
+  const instant = x => Date.parse(x.date + 'T' + (/^\d\d:\d\d/.test(x.heure || '') ? x.heure.slice(0, 5) : '12:00') + ':00');
+  let best = null, ecart = Infinity;
+  (taux || []).forEach(t => { if (t.dev !== m.dev) return; const e = Math.abs(instant(t) - instant(m)); if (e < ecart) { ecart = e; best = t; } });
+  return best ? { v: m.montant * best.r, approx: best.date !== m.date } : null;
+}
+// Bilan par type, par devise et en euros, et table des libellés pour vérifier le classement.
+function Fn_Bilan(mouvements, corrections, taux) {
+  const parType = {}, libelles = {};
+  (mouvements || []).forEach(m => {
+    const t = Fn_Classer(m, corrections);
+    const b = parType[t] = parType[t] || { nb: 0, devises: {}, eur: 0, approx: false, sansTaux: 0 };
+    b.nb++; b.devises[m.dev] = (b.devises[m.dev] || 0) + m.montant;
+    const e = Fn_EnEuros(m, taux);
+    if (e) { b.eur += e.v; if (e.approx) b.approx = true; } else b.sansTaux++;
+    // Achats et ventes portent le nom du titre : un regroupement par type suffit.
+    const n = (t === 'achat' || t === 'vente') ? '(' + Cst_Types[t] + 's)' : Fn_Normaliser(m.desc);
+    const x = libelles[n] = libelles[n] || { libelle: n, type: t, nb: 0, devises: {}, corrigeable: !(t === 'achat' || t === 'vente') };
+    x.nb++; x.devises[m.dev] = (x.devises[m.dev] || 0) + m.montant;
+  });
+  const dates = (mouvements || []).map(m => m.date).sort();
+  return { parType, libelles: Object.values(libelles).sort((a, b) => b.nb - a.nb), du: dates[0] || null, au: dates[dates.length - 1] || null };
+}
+
+/* XIRR : le taux annuel r tel que la somme des flux actualisés soit nulle.
+   Flux vus du côté de l'investisseur : versement < 0, retrait > 0, valeur finale > 0. */
+function Fn_Xirr(flux) {
+  if (!flux || flux.length < 2 || !flux.some(f => f.m < 0) || !flux.some(f => f.m > 0)) return null;
+  const t0 = Math.min(...flux.map(f => f.t));
+  const ans = flux.map(f => ({ m: f.m, a: (f.t - t0) / (365 * 86400000) }));
+  const v = r => ans.reduce((s, f) => s + f.m / Math.pow(1 + r, f.a), 0);
+  const d = r => ans.reduce((s, f) => s - f.a * f.m / Math.pow(1 + r, f.a + 1), 0);
+  let r = 0.1;
+  for (let i = 0; i < 50; i++) {
+    const fv = v(r), dv = d(r);
+    if (!isFinite(fv) || !isFinite(dv) || dv === 0) break;
+    const n = r - fv / dv;
+    if (!isFinite(n) || n <= -0.9999) break;
+    if (Math.abs(n - r) < 1e-10) return n;
+    r = n;
+  }
+  // Repli par dichotomie, robuste quand Newton diverge.
+  let a = -0.9999, b = 100, fa = v(a), fb = v(b);
+  if (!isFinite(fa) || !isFinite(fb) || fa * fb > 0) return null;
+  for (let i = 0; i < 400; i++) {
+    const m = (a + b) / 2, fm = v(m);
+    if (Math.abs(fm) < 1e-7 || b - a < 1e-12) return m;
+    if (fa * fm < 0) { b = m; fb = fm; } else { a = m; fa = fm; }
+  }
+  return (a + b) / 2;
+}
+/* Flux du XIRR, TOUS EN EUROS : versements et retraits en euros JUSQU'AU JOUR de la capture,
+   puis la valeur nette du compte en euros ce jour-là. Comme le XIRR d'un tableur, les dates
+   comptent en jours entiers (sur 365) : un flux du jour même compte pour zéro jour. */
+function Fn_JourUtc(iso) { const [a, m, j] = iso.split('-').map(Number); return Date.UTC(a, m - 1, j); }
+function Fn_FluxXirr(flux, valeur, tsValeur) {
+  if (!flux || !flux.length || valeur == null || tsValeur == null) return null;
+  const jour = Fn_Jour(tsValeur);
+  const f = flux.filter(x => x.date <= jour).map(x => ({ t: Fn_JourUtc(x.date), m: -x.montant }));
+  if (!f.length) return null;
+  f.push({ t: Fn_JourUtc(jour), m: valeur });
+  return f;
+}
+</script>
+
+<script>
+'use strict';
+/* =====================================================================
+   INTERFACE — état local, réception de la capture, diagrammes.
+   ===================================================================== */
+const Cst_Cle = 'portefeuille-v1';
+const Cst_CapturesCompletes = 40;   // au-delà, une capture ne garde que ses totaux (la courbe n'utilise qu'eux)
+const Etat_Vide = () => ({ captures: [], releve: null, corrections: {}, theme: 'auto' });
+let Var_Etat = Etat_Vide();
+try { const s = localStorage.getItem(Cst_Cle); if (s) Var_Etat = Object.assign(Etat_Vide(), JSON.parse(s)); } catch (e) { /* stockage indisponible */ }
+
+const $ = id => document.getElementById(id);
+const Fn_Esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/* SAUVEGARDE. Un stockage plein ne doit jamais perdre une capture en silence : on
+   allège d'abord les plus anciennes (elles gardent leurs totaux, seuls utilisés par
+   la courbe), puis on prévient si cela ne suffit pas. */
+function Fn_Alleger(garder) {
+  const n = Var_Etat.captures.length;
+  Var_Etat.captures.forEach((c, i) => {
+    if (i < n - garder && c.positions) { c.nb = c.positions.length; delete c.positions; delete c.nonLues; }
+  });
+}
+function Fn_Sauver() {
+  Fn_Alleger(Cst_CapturesCompletes);
+  for (const garder of [Cst_CapturesCompletes, 10, 2]) {
+    try { localStorage.setItem(Cst_Cle, JSON.stringify(Var_Etat)); $('alerte-stockage').innerHTML = ''; return true; }
+    catch (e) { Fn_Alleger(garder); }
+  }
+  $('alerte-stockage').innerHTML = '<div class="note note-crit"><b>Enregistrement impossible</b> : le stockage du navigateur est plein ou bloqué. '
+    + 'Téléchargez une sauvegarde (en bas de page) avant de fermer cette page.</div>';
+  return false;
+}
+
+const Fmt_Eur = (v, d) => v == null || !isFinite(v) ? '—' : new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: d || 0, minimumFractionDigits: d || 0 }).format(v);
+const Fmt_Dev = (v, dev) => { try { return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: dev, maximumFractionDigits: 2 }).format(v); } catch (e) { return Fmt_Nb(v, 2) + ' ' + dev; } };
+const Fmt_Pct = (v, d, signe) => v == null || !isFinite(v) ? '—' : (signe && v > 0 ? '+' : '') + new Intl.NumberFormat('fr-FR', { maximumFractionDigits: d == null ? 1 : d, minimumFractionDigits: d == null ? 1 : d }).format(v) + ' %';
+const Fmt_Nb = (v, d) => v == null ? '—' : new Intl.NumberFormat('fr-FR', { maximumFractionDigits: d == null ? 2 : d }).format(v);
+const Fmt_Date = ts => ts == null ? '—' : new Intl.DateTimeFormat('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' }).format(new Date(ts));
+const Fmt_Jour = iso => iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(2, 4) : '—';
+const Fmt_DateHeure = ts => ts == null ? '—' : new Intl.DateTimeFormat('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(ts));
+const Fmt_Compact = v => (Math.abs(v) >= 10000 ? new Intl.NumberFormat('fr-FR', { notation: 'compact', maximumFractionDigits: 1 }).format(v) : new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 0 }).format(v)) + ' €';
+const Fmt_Signe = v => (v > 0 ? '+' : '') + Fmt_Eur(v);
+const Cls_Signe = v => v == null ? '' : v >= 0 ? 'pos' : 'neg';
+
+function Fn_Derniere() { for (let i = Var_Etat.captures.length - 1; i >= 0; i--) if (Var_Etat.captures[i].positions) return Var_Etat.captures[i]; return null; }
+function Fn_Mouvements() { return Var_Etat.releve ? Var_Etat.releve.mouvements : []; }
+
+/* ---------- intégration d'une capture ---------- */
+function Fn_Integrer(texte, source) {
+  const cap = Fn_LireCapture(texte);
+  if (cap.erreur) return { ok: false, message: cap.erreur };
+  if (!cap.ts) return { ok: false, message: 'Heure de capture illisible.' };
+  if (cap.statut && !/^ok$/i.test(cap.statut)) return { ok: false, message: 'La capture se déclare « ' + cap.statut + ' » : elle est incomplète. Relancez-la.' };
+  if (!cap.positions.length) return { ok: false, message: 'Aucune position lue dans cette capture.' };
+  const enr = { ts: cap.ts, compte: cap.compte, marge: cap.marge, positions: cap.positions, nonLues: cap.nonLues, controle: Fn_Controle(cap), source: source || 'macro' };
+  const i = Var_Etat.captures.findIndex(c => c.ts === cap.ts);
+  if (i >= 0) Var_Etat.captures[i] = enr; else Var_Etat.captures.push(enr);
+  Var_Etat.captures.sort((a, b) => a.ts - b.ts);
+  Fn_Sauver();
+  return { ok: true, cap: enr };
+}
+function Fn_NoteReception(type, html) { $('reception').innerHTML = '<div class="note note-' + type + '">' + html + '</div>'; }
+function Fn_Alertes(c) {
+  const k = c.controle, out = [];
+  if (k.attendues != null && k.attendues !== k.lues) out.push(k.lues + ' ligne(s) lue(s) sur ' + k.attendues + ' livrées par la macro');
+  if (k.ecart != null && Math.abs(k.ecart) > Math.max(2, Math.abs(k.ecran) * 0.0005))
+    out.push('somme des lignes ' + Fmt_Eur(k.somme) + ' pour ' + Fmt_Eur(k.ecran) + ' à l’écran (écart ' + Fmt_Eur(k.ecart) + ')');
+  if (c.marge.vl == null) out.push('bloc de marge absent (étape 2 de la macro) : la valeur nette manque');
+  if (c.nonLues && c.nonLues.length) out.push(c.nonLues.length + ' ligne(s) non comprise(s)');
+  if (c.positions.some(p => p.qte == null)) out.push('quantité illisible : ' + c.positions.filter(p => p.qte == null).map(p => p.nom).join(', '));
+  return out;
+}
+function Fn_BilanReception(r) {
+  if (!r.ok) { Fn_NoteReception('crit', '<b>Capture non intégrée.</b> ' + Fn_Esc(r.message)); return; }
+  const a = Fn_Alertes(r.cap);
+  Fn_NoteReception(a.length ? 'warn' : 'ok', '<b>Capture du ' + Fn_Esc(Fmt_DateHeure(r.cap.ts)) + ' intégrée</b> — ' + r.cap.controle.lues + ' position(s)'
+    + (a.length ? '. À vérifier : ' + Fn_Esc(a.join(' ; ')) + '.' : ', somme des lignes = valeur des titres de l’écran.'));
+}
+async function Fn_ReceptionAuto() {
+  if (!/[?&]capture=/.test(location.search)) return;
+  try { history.replaceState(null, '', location.pathname); } catch (e) { /* adresse laissée telle quelle */ }
+  const recevoir = async () => {
+    const t = await navigator.clipboard.readText();
+    const cap = Fn_LireCapture(t);
+    if (!cap.erreur && cap.ts && (Date.now() - cap.ts) / 60000 > Cst_AgeMaxCaptureMin) {
+      Fn_NoteReception('warn', 'La capture du presse-papier date du ' + Fn_Esc(Fmt_DateHeure(cap.ts)) + ' : ce n’est pas celle qui vient d’être faite.'
+        + '<div class="rang"><button id="b-forcer">L’intégrer quand même</button></div>');
+      $('b-forcer').onclick = () => { Fn_BilanReception(Fn_Integrer(t, 'macro')); Fn_Rendre(); };
+      return;
+    }
+    Fn_BilanReception(Fn_Integrer(t, 'macro'));
+    Fn_Rendre();
+  };
+  try { await recevoir(); }
+  catch (e) {
+    Fn_NoteReception('warn', 'Le navigateur demande un appui pour lire le presse-papier.'
+      + '<div class="rang"><button class="accent" id="b-recevoir">Recevoir la capture</button></div>');
+    $('b-recevoir').onclick = () => recevoir().catch(() => Fn_NoteReception('crit', 'Lecture du presse-papier refusée : utilisez « Coller une capture » en bas de page.'));
+  }
+}
+
+/* ---------- synthèse ---------- */
+function Fn_Calculs() {
+  const c = Fn_Derniere();
+  if (!c) return null;
+  const m = c.marge;
+  const titres = m.titres != null ? m.titres : c.positions.reduce((s, p) => s + p.valeur, 0);
+  const vl = m.vl != null ? m.vl : (m.cash != null ? titres + m.cash : null);
+  const plLat = c.positions.reduce((s, p) => s + (p.plLat || 0), 0);
+  const investi = titres - plLat;
+  const jour = Fn_Jour(c.ts);
+  const mv = Fn_Mouvements();
+  const { flux, horsEuro } = Fn_Flux(mv, Var_Etat.corrections, jour);
+  const releve = mv.length > 0;
+  const verse = releve ? flux.reduce((s, f) => s + f.montant, 0) : null;
+  const fluxX = Fn_FluxXirr(flux, vl, c.ts);
+  const xirr = Fn_Xirr(fluxX);
+  const premier = flux.length ? flux[0].date : null;
+  const bilan = releve ? Fn_Bilan(mv.filter(x => x.date <= jour), Var_Etat.corrections, Fn_Taux(mv, Var_Etat.corrections)) : null;
+  const somme = types => types.reduce((s, t) => s + (bilan.parType[t] ? bilan.parType[t].eur : 0), 0);
+  const approx = types => types.some(t => bilan.parType[t] && (bilan.parType[t].approx || bilan.parType[t].sansTaux));
+  const tFrais = ['frais_courtage', 'frais_connexion', 'frais_change', 'frais'], tDiv = ['dividende', 'impot'];
+  const frais = bilan ? somme(tFrais) : null, dividendes = bilan ? somme(tDiv) : null;
+  return { c, titres, vl, cash: m.cash, plLat, plPct: investi > 0 ? plLat / investi * 100 : null, releve, verse,
+    gain: verse != null && vl != null ? vl - verse : null, xirr, premier, horsEuro, frais, dividendes,
+    fraisApprox: !!bilan && approx(tFrais), divApprox: !!bilan && approx(tDiv),
+    dureeJours: premier ? (c.ts - new Date(premier + 'T12:00:00').getTime()) / 86400000 : null };
+}
+function Fn_RendreSynthese(k) {
+  if (!k) {
+    $('entete').textContent = 'Aucune capture reçue.';
+    $('v-synthese').innerHTML = '<div class="note note-warn">Aucune capture pour l’instant. Lancez la macro depuis le widget du téléphone : cette page s’ouvrira et recevra la capture.</div>';
+    return;
+  }
+  $('entete').textContent = 'Capture du ' + Fmt_DateHeure(k.c.ts) + ' · ' + k.c.positions.length + ' positions' + (k.c.compte === 'basic' ? ' · compte sans crédit' : '');
+  const tuile = (lib, val, det, cls) => '<div class="tuile"><div class="lib">' + lib + '</div><div class="val ' + (cls || '') + '">' + val + '</div>'
+    + (det ? '<div class="det">' + det + '</div>' : '') + '</div>';
+  const sansReleve = 'importer le relevé de compte';
+  let detX = sansReleve;
+  if (k.releve) detX = (k.xirr == null ? 'pas assez de mouvements' : 'en euros, depuis le ' + Fmt_Jour(k.premier) + (k.dureeJours < 365 ? ' — moins d’un an : taux annualisé, peu significatif' : ''))
+    + (k.horsEuro.length ? ' · ⚠ ' + k.horsEuro.length + ' versement(s) ou retrait(s) en devise non compté(s) : taux faussé' : '');
+  $('v-synthese').innerHTML = '<div class="carte"><div class="heros-lib">Valeur nette du compte</div><div class="heros">' + Fmt_Eur(k.vl) + '</div>'
+    + '<div class="tuiles">'
+    + tuile('Valeur des titres', Fmt_Eur(k.titres), k.c.positions.length + ' lignes')
+    + tuile('Liquidités', Fmt_Eur(k.cash))
+    + tuile('Plus-value latente', Fmt_Signe(k.plLat), Fmt_Pct(k.plPct, 1, true) + ' sur le prix d’achat', Cls_Signe(k.plLat))
+    + tuile('XIRR', k.xirr == null ? '—' : Fmt_Pct(k.xirr * 100, 1, true) + ' / an', detX, Cls_Signe(k.xirr))
+    + tuile('Versements nets', Fmt_Eur(k.verse), k.releve ? 'versé − retiré' + (k.horsEuro.length ? ' (hors ' + k.horsEuro.length + ' en devise)' : '') : sansReleve)
+    + tuile('Gain total', k.gain == null ? '—' : Fmt_Signe(k.gain), k.releve ? 'valeur nette − versements nets' : sansReleve, Cls_Signe(k.gain))
+    + (k.releve ? tuile('Dividendes nets', (k.divApprox ? '≈ ' : '') + Fmt_Signe(k.dividendes), 'après impôts et régularisations'
+        + (k.divApprox ? ' · devises converties au taux du relevé' : ''), Cls_Signe(k.dividendes))
+      + tuile('Frais payés', (k.fraisApprox ? '≈ ' : '') + Fmt_Eur(-k.frais), 'courtage, connexion, change' + (k.fraisApprox ? ' · devises converties au taux du relevé' : '')) : '')
+    + '</div></div>';
+}
+
+/* ---------- diagrammes (SVG à la main, sans bibliothèque) ---------- */
+const NS = 'http://www.w3.org/2000/svg';
+function El(tag, at, parent) { const e = document.createElementNS(NS, tag); Object.keys(at || {}).forEach(k => e.setAttribute(k, at[k])); if (parent) parent.appendChild(e); return e; }
+function Txt(at, texte, parent) { const e = El('text', at, parent); e.textContent = texte; return e; }
+function Fn_Bulle(conteneur) {
+  let b = conteneur.querySelector('.bulle');
+  if (!b) { b = document.createElement('div'); b.className = 'bulle'; conteneur.appendChild(b); }
+  return {
+    // (x, y) : point visé ; (y2) : bas de la marque, pour passer dessous quand il n'y a pas la place au-dessus.
+    montrer(html, x, y, y2) {
+      b.innerHTML = html; b.style.display = 'block';
+      const w = b.offsetWidth, h = b.offsetHeight, W = conteneur.clientWidth;
+      b.style.left = Math.max(0, Math.min(W - w, x - w / 2)) + 'px';
+      b.style.top = (y - h - 8 >= 0 ? y - h - 8 : (y2 != null ? y2 : y) + 8) + 'px';
+    },
+    cacher() { b.style.display = 'none'; }
+  };
+}
+document.addEventListener('pointerdown', e => { if (!e.target.closest('.graphe')) document.querySelectorAll('.bulle').forEach(b => { b.style.display = 'none'; }); });
+// Barre horizontale : extrémité de données arrondie (4 px), côté ligne de base carré.
+function Fn_CheminBarre(x0, x1, y, h) {
+  if (Math.abs(x1 - x0) < 0.5) return '';
+  const r = Math.min(4, Math.abs(x1 - x0), h / 2), s = x1 >= x0 ? 1 : -1;
+  return 'M' + x0 + ',' + y + 'H' + (x1 - s * r) + 'Q' + x1 + ',' + y + ' ' + x1 + ',' + (y + r) + 'V' + (y + h - r)
+    + 'Q' + x1 + ',' + (y + h) + ' ' + (x1 - s * r) + ',' + (y + h) + 'H' + x0 + 'Z';
+}
+function Fn_Tronquer(s, n) { s = String(s); return s.length > n ? s.slice(0, Math.max(1, n - 1)) + '…' : s; }
+function Fn_Cible(svg, W, y, h, montrer, bulle) {
+  const r = El('rect', { x: 0, y, width: W, height: h, fill: 'transparent' }, svg);
+  r.addEventListener('pointerenter', montrer); r.addEventListener('pointerdown', montrer); r.addEventListener('pointerleave', () => bulle.cacher());
+}
+
+function Fn_GrapheRepartition(c) {
+  const zone = $('g-repartition'); zone.innerHTML = '';
+  const total = c.positions.reduce((s, p) => s + p.valeur, 0);
+  const rows = c.positions.map(p => ({ p, part: p.valeur / total * 100 })).sort((a, b) => b.part - a.part);
+  const W = zone.clientWidth, bande = 26, epais = 16, gNom = Math.min(190, W * 0.38), gVal = 52;
+  const H = rows.length * bande + 4, xMax = Math.max(...rows.map(r => r.part));
+  const X = v => gNom + (W - gNom - gVal) * v / xMax;
+  const svg = El('svg', { viewBox: '0 0 ' + W + ' ' + H, height: H, role: 'img', 'aria-label': 'Répartition par ligne (valeurs dans le tableau Positions)' }, zone);
+  El('line', { x1: gNom, x2: gNom, y1: 0, y2: H, stroke: 'var(--axe)', 'stroke-width': 1 }, svg);
+  const bulle = Fn_Bulle(zone);
+  rows.forEach((r, i) => {
+    const y = i * bande + (bande - epais) / 2;
+    Txt({ x: gNom - 8, y: y + epais / 2 + 4, 'text-anchor': 'end' }, Fn_Tronquer(r.p.nom, Math.floor((gNom - 10) / 6.6)), svg);
+    El('path', { d: Fn_CheminBarre(gNom, X(r.part), y, epais), fill: 'var(--serie-1)' }, svg);
+    Txt({ x: X(r.part) + 6, y: y + epais / 2 + 4 }, Fmt_Pct(r.part, 1), svg);
+    Fn_Cible(svg, W, i * bande, bande, () => bulle.montrer('<b>' + Fn_Esc(r.p.nom) + '</b><br>' + Fmt_Eur(r.p.valeur) + ' · ' + Fmt_Pct(r.part, 1) + ' des titres',
+      X(r.part), i * bande, (i + 1) * bande), bulle);
+  });
+}
+
+function Fn_GraphePlusValues(c) {
+  const zone = $('g-plusvalues'); zone.innerHTML = '';
+  const rows = c.positions.slice().sort((a, b) => b.plLat - a.plLat);
+  const W = zone.clientWidth, bande = 26, epais = 16, gNom = Math.min(170, W * 0.32), marge = 64;
+  const H = rows.length * bande + 4;
+  const min = Math.min(0, ...rows.map(r => r.plLat)), max = Math.max(0, ...rows.map(r => r.plLat));
+  const x0 = gNom + (min < 0 ? marge : 6), x1 = W - (max > 0 ? marge : 6);
+  const X = v => x0 + (x1 - x0) * (v - min) / ((max - min) || 1), zero = X(0);
+  const svg = El('svg', { viewBox: '0 0 ' + W + ' ' + H, height: H, role: 'img', 'aria-label': 'Plus-values latentes par ligne (valeurs dans le tableau Positions)' }, zone);
+  El('line', { x1: zero, x2: zero, y1: 0, y2: H, stroke: 'var(--axe)', 'stroke-width': 1 }, svg);
+  const bulle = Fn_Bulle(zone);
+  rows.forEach((p, i) => {
+    const y = i * bande + (bande - epais) / 2, xv = X(p.plLat), gain = p.plLat >= 0;
+    Txt({ x: gNom - 8, y: y + epais / 2 + 4, 'text-anchor': 'end' }, Fn_Tronquer(p.nom, Math.floor((gNom - 10) / 6.6)), svg);
+    El('path', { d: Fn_CheminBarre(zero, xv, y, epais), fill: gain ? 'var(--gain)' : 'var(--perte)' }, svg);
+    Txt({ x: gain ? xv + 6 : xv - 6, y: y + epais / 2 + 4, 'text-anchor': gain ? 'start' : 'end' }, (gain ? '+' : '') + Fmt_Compact(p.plLat), svg);
+    Fn_Cible(svg, W, i * bande, bande, () => bulle.montrer('<b>' + Fn_Esc(p.nom) + '</b><br>' + Fmt_Signe(p.plLat) + ' · ' + Fmt_Pct(p.plPct, 1, true)
+      + '<br>PRU ' + Fmt_Nb(p.pru, 4) + ' ' + Fn_Esc(p.dev) + ' · cours ' + Fmt_Nb(p.cours, 4) + ' ' + Fn_Esc(p.dev), xv, i * bande, (i + 1) * bande), bulle);
+  });
+}
+
+function Fn_PasRond(etendue) {
+  const brut = etendue / 4, p = Math.pow(10, Math.floor(Math.log10(brut || 1)));
+  return [1, 2, 2.5, 5, 10].map(k => k * p).find(s => s >= brut) || 10 * p;
+}
+function Fn_GrapheEvolution(k) {
+  const zone = $('g-evolution'); zone.innerHTML = '';
+  const pts = Var_Etat.captures.filter(c => c.marge && c.marge.vl != null).map(c => ({ t: c.ts, v: c.marge.vl, c }));
+  const sous = $('evolution-sous'), leg = $('evolution-legende');
+  if (!pts.length) { sous.textContent = 'La courbe se dessinera au fil des captures (il faut le bloc de marge, étape 2 de la macro).'; leg.innerHTML = ''; $('t-evolution').innerHTML = ''; return; }
+  const dernier = pts[pts.length - 1];
+  // La fenêtre est celle des CAPTURES : la valeur n'est connue qu'à leurs dates. Sept jours au moins.
+  let tMin = pts[0].t, tMax = dernier.t;
+  if (tMax - tMin < 7 * 86400000) { const milieu = (tMin + tMax) / 2; tMin = milieu - 3.5 * 86400000; tMax = milieu + 3.5 * 86400000; }
+  // Versements nets cumulés SUR LA MÊME FENÊTRE : leur niveau au début, puis une marche par versement ou retrait.
+  const { flux } = Fn_Flux(Fn_Mouvements(), Var_Etat.corrections, Fn_Jour(dernier.t));
+  const marches = [];
+  if (flux.length) {
+    const quand = f => new Date(f.date + 'T12:00:00').getTime();
+    let cumul = flux.filter(f => quand(f) <= tMin).reduce((s, f) => s + f.montant, 0);
+    marches.push({ t: tMin, v: cumul });
+    flux.filter(f => quand(f) > tMin).forEach(f => { cumul += f.montant; marches.push({ t: quand(f), v: cumul }); });
+    marches.push({ t: tMax, v: cumul });
+  }
+  sous.textContent = (pts.length === 1 ? 'Une seule capture pour l’instant : chaque nouvelle capture ajoute un point. Les captures archivées du téléphone (Documents/Vigie/captures) peuvent être importées en bas de page.'
+    : pts.length + ' captures, du ' + Fmt_Date(pts[0].t) + ' au ' + Fmt_Date(dernier.t) + '.');
+  leg.innerHTML = '<span><i style="background:var(--serie-1)"></i>Valeur nette</span>' + (marches.length ? '<span><i style="background:var(--serie-2)"></i>Versements nets cumulés</span>' : '');
+  const W = zone.clientWidth, H = 240, g = 58, d = 64, h = 12, b = 26;
+  const tous = pts.concat(marches);
+  // Axe resserré sur les valeurs, pour que leurs variations se voient (une courbe n'a pas besoin du
+  // zéro) — et dans ce cas, pas d'aire pleine, qui laisserait croire à une grandeur mesurée depuis zéro.
+  let vMin = Math.min(...tous.map(p => p.v)), vMax = Math.max(...tous.map(p => p.v));
+  const ecart = Math.max(vMax - vMin, Math.abs(vMax) * 0.04, 1);
+  vMin = Math.max(0, vMin - ecart * 0.15); vMax += ecart * 0.15;
+  const pas = Fn_PasRond(vMax - vMin);
+  vMin = Math.floor(vMin / pas) * pas; vMax = Math.ceil(vMax / pas) * pas;
+  const X = t => g + (W - g - d) * (t - tMin) / (tMax - tMin), Y = v => h + (H - h - b) * (1 - (v - vMin) / ((vMax - vMin) || 1));
+  const svg = El('svg', { viewBox: '0 0 ' + W + ' ' + H, height: H, role: 'img', 'aria-label': 'Évolution de la valeur nette (valeurs dans le tableau sous le graphique)' }, zone);
+  for (let v = vMin; v <= vMax + pas / 2; v += pas) {
+    El('line', { x1: g, x2: W - d, y1: Y(v), y2: Y(v), stroke: v === vMin ? 'var(--axe)' : 'var(--grille)', 'stroke-width': 1 }, svg);
+    Txt({ x: g - 6, y: Y(v) + 4, 'text-anchor': 'end', class: 'axe-txt' }, Fmt_Compact(v), svg);
+  }
+  const etiquettes = W < 420 ? [tMin, tMax] : [tMin, (tMin + tMax) / 2, tMax];
+  etiquettes.forEach((tt, i) => Txt({ x: X(tt), y: H - 6, 'text-anchor': i === 0 ? 'start' : i === etiquettes.length - 1 ? 'end' : 'middle', class: 'axe-txt' }, Fmt_Date(tt), svg));
+  if (marches.length) {
+    let dd = 'M' + X(marches[0].t) + ',' + Y(marches[0].v);
+    for (let i = 1; i < marches.length; i++) dd += 'H' + X(marches[i].t) + 'V' + Y(marches[i].v);
+    El('path', { d: dd, fill: 'none', stroke: 'var(--serie-2)', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, svg);
+  }
+  if (pts.length > 1) {
+    if (vMin === 0) El('path', { d: 'M' + pts.map(p => X(p.t) + ',' + Y(p.v)).join('L') + 'L' + X(dernier.t) + ',' + Y(0) + 'L' + X(pts[0].t) + ',' + Y(0) + 'Z', fill: 'var(--serie-1)', opacity: 0.1 }, svg);
+    El('path', { d: 'M' + pts.map(p => X(p.t) + ',' + Y(p.v)).join('L'), fill: 'none', stroke: 'var(--serie-1)', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, svg);
+  }
+  El('circle', { cx: X(dernier.t), cy: Y(dernier.v), r: 5, fill: 'var(--serie-1)', stroke: 'var(--surface)', 'stroke-width': 2 }, svg);
+  Txt({ x: X(dernier.t) + 9, y: Y(dernier.v) + 4, class: 'fort' }, Fmt_Compact(dernier.v), svg);
+  // Réticule : la capture la plus proche du doigt.
+  const bulle = Fn_Bulle(zone);
+  const reticule = El('line', { y1: h, y2: H - b, stroke: 'var(--axe)', 'stroke-width': 1, visibility: 'hidden' }, svg);
+  const point = El('circle', { r: 5, fill: 'var(--serie-1)', stroke: 'var(--surface)', 'stroke-width': 2, visibility: 'hidden' }, svg);
+  const cible = El('rect', { x: g, y: 0, width: W - g - d, height: H - b, fill: 'transparent' }, svg);
+  const suivre = ev => {
+    const r = svg.getBoundingClientRect(), x = (ev.clientX - r.left) * W / r.width;
+    let best = pts[0]; pts.forEach(p => { if (Math.abs(X(p.t) - x) < Math.abs(X(best.t) - x)) best = p; });
+    reticule.setAttribute('x1', X(best.t)); reticule.setAttribute('x2', X(best.t)); reticule.setAttribute('visibility', 'visible');
+    point.setAttribute('cx', X(best.t)); point.setAttribute('cy', Y(best.v)); point.setAttribute('visibility', 'visible');
+    const verse = marches.filter(m => m.t <= best.t).map(m => m.v).pop();
+    bulle.montrer('<b>' + Fmt_DateHeure(best.t) + '</b><br>Valeur nette ' + Fmt_Eur(best.v) + (verse != null ? '<br>Versements nets ' + Fmt_Eur(verse) : ''), X(best.t), Y(best.v), Y(best.v));
+  };
+  cible.addEventListener('pointermove', suivre); cible.addEventListener('pointerdown', suivre);
+  cible.addEventListener('pointerleave', () => { bulle.cacher(); reticule.setAttribute('visibility', 'hidden'); point.setAttribute('visibility', 'hidden'); });
+  $('t-evolution').innerHTML = '<table><thead><tr><th>Capture</th><th>Valeur nette</th><th>Titres</th><th>Liquidités</th></tr></thead><tbody>'
+    + pts.slice(-60).reverse().map(p => '<tr><td>' + Fmt_DateHeure(p.t) + '</td><td>' + Fmt_Eur(p.v) + '</td><td>' + Fmt_Eur(p.c.marge.titres) + '</td><td>' + Fmt_Eur(p.c.marge.cash) + '</td></tr>').join('')
+    + '</tbody></table>';
+}
+
+/* ---------- tableau des positions ---------- */
+function Fn_RendreTableau(c) {
+  const total = c.positions.reduce((s, p) => s + p.valeur, 0);
+  const rows = c.positions.slice().sort((a, b) => b.valeur - a.valeur);
+  const alertes = Fn_Alertes(c);
+  // Quatre colonnes pour tenir sur un téléphone ; quantité, cours et PRU passent sous le nom.
+  $('t-positions').innerHTML = '<table><thead><tr><th>Titre</th><th>Valeur</th><th>Poids</th><th>+/− latente</th></tr></thead><tbody>'
+    + rows.map(p => '<tr><td>' + Fn_Esc(p.nom) + '<div class="muet">' + Fn_Esc(p.ticker) + ' · ' + Fmt_Nb(p.qte, 0) + ' × ' + Fmt_Nb(p.cours, 3) + ' ' + Fn_Esc(p.dev)
+      + ' · PRU ' + Fmt_Nb(p.pru, 3) + '</div></td><td>' + Fmt_Eur(p.valeur) + '</td><td>' + Fmt_Pct(p.valeur / total * 100, 1)
+      + '</td><td class="' + Cls_Signe(p.plLat) + '">' + Fmt_Signe(p.plLat) + '<div class="muet">' + Fmt_Pct(p.plPct, 1, true) + '</div></td></tr>').join('')
+    + '</tbody></table>'
+    + (alertes.length ? '<div class="note note-warn">À vérifier sur cette capture : ' + Fn_Esc(alertes.join(' ; ')) + '.</div>' : '');
+}
+
+/* ---------- relevé ---------- */
+function Fn_RendreReleve() {
+  const mv = Fn_Mouvements();
+  if (!mv.length) { $('releve-etat').innerHTML = '<div class="note note-warn">Aucun relevé importé : XIRR, versements, dividendes et frais restent vides.</div>'; return; }
+  const b = Fn_Bilan(mv, Var_Etat.corrections, Fn_Taux(mv, Var_Etat.corrections));
+  const { horsEuro } = Fn_Flux(mv, Var_Etat.corrections);
+  const imp = Var_Etat.releve.imports || [];
+  const montants = dv => Object.keys(dv).sort((x, y) => x === 'EUR' ? -1 : y === 'EUR' ? 1 : x < y ? -1 : 1).map(d => Fmt_Dev(dv[d], d)).join('<br>');
+  const ordre = ['versement', 'retrait', 'dividende', 'impot', 'frais_courtage', 'frais_connexion', 'frais_change', 'frais', 'interet', 'achat', 'vente', 'regularisation', 'change', 'interne', 'autre'];
+  // En euros : sans objet pour le change et les transferts internes, qui se compensent d'une ligne à l'autre.
+  const enEuros = t => (t === 'change' || t === 'interne') ? '—'
+    : (b.parType[t].approx || b.parType[t].sansTaux ? '≈ ' : '') + Fmt_Eur(b.parType[t].eur, 2) + (b.parType[t].sansTaux ? ' <span class="muet">(' + b.parType[t].sansTaux + ' sans taux)</span>' : '');
+  const derniere = Fn_Derniere();
+  const vieux = derniere && imp.length && Fn_Jour(imp[imp.length - 1].ts) < Fn_Jour(derniere.ts);
+  $('releve-etat').innerHTML = '<div class="note note-ok">' + mv.length + ' mouvements, du ' + Fmt_Jour(b.du) + ' au ' + Fmt_Jour(b.au)
+    + (imp.length ? ' · dernier import le ' + Fmt_Date(imp[imp.length - 1].ts) + ' (' + Fn_Esc(imp[imp.length - 1].fichier) + ', ' + imp[imp.length - 1].ajoutes + ' nouveau(x))' : '') + '.</div>'
+    + (vieux ? '<div class="muet">Si vous avez versé ou retiré de l’argent depuis le ' + Fmt_Date(imp[imp.length - 1].ts) + ', importez un relevé récent : sinon le XIRR et le gain total n’en tiennent pas compte.</div>' : '')
+    + (horsEuro.length ? '<div class="note note-warn">' + horsEuro.length + ' versement(s) ou retrait(s) dans une autre devise que l’euro ne sont pas comptés dans le XIRR.</div>' : '')
+    + '<h2 style="margin-top:10px">Bilan du compte</h2><div class="defile"><table><thead><tr><th>Type</th><th>Nb</th><th>Montant</th><th>En euros</th></tr></thead><tbody>'
+    + ordre.filter(t => b.parType[t]).map(t => '<tr><td>' + Fn_Esc(Cst_Types[t]) + '</td><td>' + b.parType[t].nb + '</td><td>' + montants(b.parType[t].devises) + '</td><td>' + enEuros(t) + '</td></tr>').join('')
+    + '</tbody></table></div><div class="muet">« En euros » : un montant en devise est converti au taux de l’opération de change du relevé la plus proche '
+    + '(« ≈ » quand elle n’a pas eu lieu le même jour) — jamais à un taux extérieur. Les opérations de change et les transferts internes '
+    + '(compte espèces flatex, fonds monétaire, réservations) se compensent d’une ligne à l’autre. Le XIRR, lui, n’utilise que des euros : '
+    + 'versements, retraits et valeur du compte.</div>'
+    + '<details><summary>Libellés du relevé et leur classement (à vérifier une fois)</summary><div class="defile"><table><thead><tr><th>Libellé</th><th>Classé en</th><th>Nb</th><th>Montant</th></tr></thead><tbody>'
+    + b.libelles.map(x => '<tr><td>' + Fn_Esc(x.libelle) + '</td><td>' + (x.corrigeable
+      ? '<select data-libelle="' + Fn_Esc(x.libelle) + '">' + Object.keys(Cst_Types).map(t => '<option value="' + t + '"' + (t === x.type ? ' selected' : '') + '>' + Fn_Esc(Cst_Types[t]) + '</option>').join('') + '</select>'
+        + (Var_Etat.corrections[x.libelle] ? ' <span class="muet">corrigé</span>' : '')
+      : Fn_Esc(Cst_Types[x.type])) + '</td><td>' + x.nb + '</td><td>' + montants(x.devises) + '</td></tr>').join('')
+    + '</tbody></table></div><div class="muet">Seuls « Versement » et « Retrait » entrent dans le XIRR. Si un libellé est mal classé, changez-le ici : la correction vaut pour tous les mouvements de ce libellé.</div></details>';
+  document.querySelectorAll('#releve-etat select[data-libelle]').forEach(s => s.onchange = () => {
+    Var_Etat.corrections[s.dataset.libelle] = s.value; Fn_Sauver(); Fn_Rendre();
+  });
+}
+
+/* ---------- ensemble ---------- */
+function Fn_Rendre() {
+  const c = Fn_Derniere();
+  // Les sections s'affichent AVANT d'être dessinées : un graphique dessiné caché n'a pas de largeur.
+  ['c-evolution', 'c-repartition', 'c-plusvalues', 'c-positions'].forEach(id => $(id).classList.toggle('cache', !c));
+  const k = Fn_Calculs();
+  Fn_RendreSynthese(k);
+  if (c) { Fn_GrapheEvolution(k); Fn_GrapheRepartition(c); Fn_GraphePlusValues(c); Fn_RendreTableau(c); }
+  Fn_RendreReleve();
+  const n = Var_Etat.captures.length;
+  $('captures-etat').textContent = n ? n + ' capture(s) enregistrée(s), du ' + Fmt_Date(Var_Etat.captures[0].ts) + ' au ' + Fmt_Date(Var_Etat.captures[n - 1].ts) + '.' : 'Aucune capture enregistrée.';
+}
+function Fn_Theme() {
+  const t = Var_Etat.theme || 'auto';
+  if (t === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', t);
+  $('b-theme').textContent = 'Thème : ' + ({ auto: 'auto', light: 'clair', dark: 'sombre' }[t]);
+}
+const lireFichier = f => new Promise((ok, ko) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = ko; r.readAsText(f, 'utf-8'); });
+
+$('b-coller').onclick = () => $('zone-collage').classList.toggle('cache');
+$('b-integrer').onclick = () => { Fn_BilanReception(Fn_Integrer($('t-collage').value, 'collage')); $('t-collage').value = ''; Fn_Rendre(); window.scrollTo(0, 0); };
+$('f-captures').onchange = async e => {
+  let ok = 0, ko = 0;
+  for (const f of e.target.files) { const r = Fn_Integrer(await lireFichier(f), 'archive'); r.ok ? ok++ : ko++; }
+  Fn_NoteReception(ko ? 'warn' : 'ok', ok + ' capture(s) importée(s)' + (ko ? ', ' + ko + ' fichier(s) ignoré(s) (pas une capture, ou capture incomplète)' : '') + '.');
+  e.target.value = ''; Fn_Rendre(); window.scrollTo(0, 0);
+};
+$('f-releve').onchange = async e => {
+  const bilans = [];
+  for (const f of e.target.files) {
+    const r = Fn_LireReleve(await lireFichier(f));
+    if (r.erreur) { bilans.push('<b>' + Fn_Esc(f.name) + '</b> : ' + Fn_Esc(r.erreur)); continue; }
+    const fu = Fn_Fusionner(Fn_Mouvements(), r.mouvements);
+    Var_Etat.releve = { mouvements: fu.tous, imports: ((Var_Etat.releve && Var_Etat.releve.imports) || []).concat([{ fichier: f.name, ts: Date.now(), lus: r.mouvements.length, ajoutes: fu.ajoutes }]) };
+    bilans.push('<b>' + Fn_Esc(f.name) + '</b> : ' + r.mouvements.length + ' mouvement(s) lu(s), ' + fu.ajoutes + ' nouveau(x)' + (r.rejets ? ', ' + r.rejets + ' ligne(s) sans date ou sans montant ignorée(s)' : ''));
+  }
+  Fn_Sauver();
+  Fn_NoteReception(bilans.some(x => /colonnes|vide|illisible|Aucun/.test(x)) ? 'warn' : 'ok', 'Relevé — ' + bilans.join('<br>'));
+  e.target.value = ''; Fn_Rendre(); window.scrollTo(0, 0);
+};
+$('b-sauver').onclick = () => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(Var_Etat)], { type: 'application/json' }));
+  a.download = 'portefeuille-' + Fn_Jour(Date.now()) + '.json'; a.click();
+};
+$('f-restaurer').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try { const s = JSON.parse(await lireFichier(f)); if (!Array.isArray(s.captures)) throw new Error('format'); Var_Etat = Object.assign(Etat_Vide(), s); Fn_Sauver(); Fn_NoteReception('ok', 'Sauvegarde restaurée.'); }
+  catch (err) { Fn_NoteReception('crit', 'Ce fichier n’est pas une sauvegarde de cette page.'); }
+  e.target.value = ''; Fn_Theme(); Fn_Rendre();
+};
+let armeEffacer = false;
+$('b-effacer').onclick = () => {
+  if (!armeEffacer) { armeEffacer = true; $('b-effacer').textContent = 'Confirmer : tout effacer ?'; return; }
+  Var_Etat = Object.assign(Etat_Vide(), { theme: Var_Etat.theme }); Fn_Sauver(); armeEffacer = false; $('b-effacer').textContent = 'Tout effacer'; Fn_Rendre();
+};
+$('b-theme').onclick = () => { Var_Etat.theme = { auto: 'light', light: 'dark', dark: 'auto' }[Var_Etat.theme || 'auto']; Fn_Sauver(); Fn_Theme(); Fn_Rendre(); };
+let attente, largeur = window.innerWidth;
+window.addEventListener('resize', () => { if (window.innerWidth === largeur) return; largeur = window.innerWidth; clearTimeout(attente); attente = setTimeout(Fn_Rendre, 150); });
+
+Fn_Theme(); Fn_Rendre(); Fn_ReceptionAuto();
+</script>
+</body>
+</html>

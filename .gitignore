@@ -1,0 +1,10 @@
+# Dépôt PUBLIC : aucune donnée de portefeuille ne doit y entrer.
+*.csv
+*.txt
+*.xls
+*.xlsx
+*.json
+*.mdr
+*.macro
+*.png
+!robots.txt
