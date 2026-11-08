@@ -179,8 +179,13 @@ select { max-width: 100%; }
 
   <section class="carte" id="c-analyse">
     <h2>Analyse par Claude</h2>
-    <div class="muet">Avertissements et propositions rédigés par Claude à partir de vos chiffres — et, au choix, de l’actualité trouvée sur le web.
-      Rien n’est envoyé sans votre appui ; le coût estimé s’affiche avant. Ce n’est pas un conseil en investissement.</div>
+    <div class="rang"><button class="accent" id="b-analyse-app">Analyse complète dans l’app Claude</button></div>
+    <div class="muet">Sans coût d’API : comprise dans votre abonnement Claude. Claude y cherche lui-même, ligne par ligne, les résultats, la valorisation,
+      l’avis des analystes et l’actualité (AFP, Reuters, sites d’analyse financière) — pas d’analyse technique. La demande (vos chiffres, sans nom
+      ni numéro de compte) est copiée et Claude s’ouvre : collez, envoyez.</div>
+    <div id="analyse-app"></div>
+    <div class="muet" style="margin-top:12px">Ou, rangée dans cette page, l’analyse par la clé API de Vigie (payante : le coût estimé s’affiche avant).
+      Rien n’est envoyé sans votre appui. Ce n’est pas un conseil en investissement.</div>
     <div id="analyse-cle"></div>
     <div class="rang">
       <button id="b-analyse-rapide">Analyse rapide</button>
@@ -1788,14 +1793,20 @@ function Fn_RendreEcarts(c) {
 }
 /* GAIN SUR L'ARGENT VERSÉ dans le temps : (valeur du compte − versements nets) ÷ versements nets. Un versement le fait
    baisser sans qu'il y ait de perte (l'argent neuf n'a encore rien gagné) ; le XIRR, lui, en tient compte. */
-function Fn_GrapheGainPct(hist) {
-  const bloc = $('bloc-gainpct'), zone = $('g-gainpct');
-  if (!hist) { bloc.classList.add('cache'); return; }
+// Gain du compte en % de l'argent versé, chaque jour de l'historique, et le rang de son plus haut sur 12 mois (pic).
+function Fn_GainSurVerse(hist) {
   const flux = Fn_Flux(Fn_Mouvements(), Var_Etat.corrections).flux.slice().sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
   let k = 0, verse = 0;
   const verses = hist.jours.map(j => { while (k < flux.length && flux[k].date <= j) verse += flux[k++].montant; return verse; });
   const vals = hist.valeurs.map((v, i) => verses[i] > 100 ? (v / verses[i] - 1) * 100 : null);
-  const n = vals.length - 1, ans = [];
+  const n = vals.length - 1, ilYaUnAn = n < 0 ? '' : (Number(hist.jours[n].slice(0, 4)) - 1) + hist.jours[n].slice(4);
+  let pic = n; vals.forEach((v, i) => { if (v != null && hist.jours[i] >= ilYaUnAn && (vals[pic] == null || v > vals[pic])) pic = i; });
+  return { verses, vals, pic };
+}
+function Fn_GrapheGainPct(hist) {
+  const bloc = $('bloc-gainpct'), zone = $('g-gainpct');
+  if (!hist) { bloc.classList.add('cache'); return; }
+  const { verses, vals, pic } = Fn_GainSurVerse(hist), n = vals.length - 1, ans = [];
   bloc.classList.remove('cache');   // affiché avant d'être dessiné
   hist.jours.forEach((j, i) => { if (i > 0 && j.slice(0, 4) !== hist.jours[i - 1].slice(0, 4)) ans.push([i, j.slice(0, 4)]); });
   const ok = Fn_CourbePct(zone, vals, { H: 160, axes: true, id: 'gainpct', titre: 'Gain sur l’argent versé, en pourcentage', etiquettes: ans,
@@ -1803,8 +1814,6 @@ function Fn_GrapheGainPct(hist) {
       + '<br>Valeur ' + Fmt_Eur(hist.valeurs[i]) + ' · versé ' + Fmt_Eur(verses[i])) });
   bloc.classList.toggle('cache', !ok);
   if (!ok) return;
-  const ilYaUnAn = (Number(hist.jours[n].slice(0, 4)) - 1) + hist.jours[n].slice(4);
-  let pic = n; vals.forEach((v, i) => { if (v != null && hist.jours[i] >= ilYaUnAn && (vals[pic] == null || v > vals[pic])) pic = i; });
   $('gainpct-sous').textContent = 'Gain du compte en % de l’argent versé, chaque jour, change compris. Aujourd’hui ' + Fmt_Pct(vals[n], 1, true)
     + (vals[pic] != null && pic !== n ? ' ; plus haut sur 12 mois ' + Fmt_Pct(vals[pic], 1, true) + ' le ' + Fmt_Jour(hist.jours[pic]) : '')
     + '. Un versement fait baisser ce % sans perte (l’argent neuf n’a encore rien gagné) ; le XIRR, lui, en tient compte.';
@@ -1891,41 +1900,138 @@ const Cst_OutilRapport = {
       raison: { type: 'string' } } } },
     sources: { type: 'array', description: 'Pages web utilisées (vide en analyse rapide).', items: { type: 'object', additionalProperties: false, required: ['titre', 'url'], properties: { titre: { type: 'string' }, url: { type: 'string' } } } } } }
 };
-// Ce qui part chez Anthropic : les chiffres du portefeuille, sans nom de titulaire ni identifiant de compte.
+// Ce qui part chez Claude : les chiffres du portefeuille, sans nom de titulaire ni identifiant de compte. Aucun indicateur
+// d'analyse technique (moyenne mobile, plus haut…) : les variations de cours ne servent qu'à demander « pourquoi ? ».
 function Fn_DonneesAnalyse(k) {
   const c = Fn_Derniere(), tot = c.positions.reduce((s, p) => s + p.valeur, 0), ilYa = n => Fn_Jour(Date.now() - n * 86400000);
-  const r1 = x => x == null || !isFinite(x) ? null : Math.round(x * 10) / 10;
+  const r1 = x => x == null || !isFinite(x) ? null : Math.round(x * 10) / 10, arr = x => x == null || !isFinite(x) ? null : Math.round(x);
+  const mv = Fn_Mouvements(), lignes = Fn_LignesMemo(), taux = Fn_Taux(mv, Var_Etat.corrections);
+  const yahoo = isin => (((Var_Cours.index && Var_Cours.index.series) || []).find(s => s.id === isin) || {}).symbole || null;
+  const anciens = (isin, nom) => { const a = Fn_Anciens(isin, nom).map(x => x.nom); return a.length ? a : undefined; };
+  // Bilan en euros de chaque titre sur tout le relevé : achats, ventes, dividendes, impôts et frais (ancien ISIN compris).
+  const vers = {}, bil = {};
+  Fn_Liens().forEach(l => { vers[l.de] = l.vers; });
+  mv.forEach(m => {
+    const t = Fn_Classer(m, Var_Etat.corrections), e = m.isin && t !== 'change' && t !== 'interne' ? Fn_EnEuros(m, taux) : null;
+    if (!e) return;
+    const i = vers[m.isin] || m.isin, b = bil[i] = bil[i] || { flux: 0, div: 0 };
+    b.flux += e.v; if (t === 'dividende' || t === 'impot') b.div += e.v;
+  });
+  const qteFin = l => l.etats[l.etats.length - 1].qte;
+  const ops = l => l ? l.ops.map(o => o.date + ' ' + o.type + ' ' + o.qte + ' à ' + o.prix + ' ' + o.dev + (o.ost ? ' (' + o.ost + ')' : '')) : [];
+  const hist = Fn_Historique(), g = hist && hist.jours.length ? Fn_GainSurVerse(hist) : null, n = g ? g.vals.length - 1 : -1;
+  const detenus = new Set(c.positions.map(p => p.isin));
   return {
     date: Fn_Jour(c.ts), compte: 'DEGIRO, profil sans crédit : ni marge, ni produits à levier',
-    valeur_nette_eur: Math.round(k.vl), valeur_titres_eur: Math.round(k.titres), liquidites_eur: k.cash == null ? null : Math.round(k.cash),
-    plus_value_latente_eur: Math.round(k.plLat), plus_value_latente_pct: r1(k.plPct), xirr_pct: k.xirr == null ? null : r1(k.xirr * 100),
-    versements_nets_eur: k.verse == null ? null : Math.round(k.verse), dividendes_nets_eur: k.dividendes == null ? null : Math.round(k.dividendes),
-    frais_payes_eur: k.frais == null ? null : Math.round(-k.frais),
+    valeur_nette_eur: arr(k.vl), valeur_titres_eur: arr(k.titres), liquidites_eur: arr(k.cash),
+    plus_value_latente_eur: arr(k.plLat), plus_value_latente_pct: r1(k.plPct), xirr_pct: k.xirr == null ? null : r1(k.xirr * 100),
+    versements_nets_eur: arr(k.verse), gain_total_eur: arr(k.gain), premier_versement: k.premier,
+    dividendes_nets_eur: arr(k.dividendes), frais_payes_eur: k.frais == null ? null : arr(-k.frais),
+    gain_sur_verse: g ? { aujourdhui_pct: r1(g.vals[n]), plus_haut_12_mois_pct: r1(g.vals[g.pic]), date_plus_haut: hist.jours[g.pic] } : null,
     positions: c.positions.slice().sort((a, b) => b.valeur - a.valeur).map(p => {
-      const s = Fn_Serie(p.isin), un = s ? s.clotures.slice(Math.max(0, Fn_RangAu(s.jours, ilYa(365)))) : null;
-      const haut = un && un.length ? Math.max(...un) : null, mm = s && s.clotures.length >= 200 ? Fn_Moyenne(s.clotures.slice(-200)) : null;
-      const anciens = Fn_Anciens(p.isin, p.nom).map(a => a.nom);
-      return { nom: p.nom, ticker: p.ticker, isin: p.isin, pays: p.isin.slice(0, 2), devise: p.dev, poids_pct: r1(p.valeur / tot * 100), valeur_eur: Math.round(p.valeur),
-        plus_value_pct: r1(p.plPct), cours: p.cours, pru: p.pru,
-        perf_1_mois_pct: r1(Fn_PerformanceSerie(s, ilYa(31))), perf_1_an_pct: r1(Fn_PerformanceSerie(s, ilYa(365))),
-        ecart_au_plus_haut_1_an_pct: haut ? r1((s.clotures[s.clotures.length - 1] / haut - 1) * 100) : null,
-        sous_moyenne_200_jours: mm == null ? null : s.clotures[s.clotures.length - 1] < mm, anciens_noms: anciens };
+      const s = Fn_Serie(p.isin), l = lignes[p.isin], b = bil[p.isin];
+      const complet = l && b && p.qte != null && Math.abs(qteFin(l) - p.qte) < 1e-6;   // le relevé couvre toute la ligne
+      return { nom: p.nom, anciens_noms: anciens(p.isin, p.nom), ticker: p.ticker, yahoo: yahoo(p.isin), isin: p.isin, devise: p.dev,
+        quantite: p.qte, cours: p.cours, pru: p.pru, valeur_eur: arr(p.valeur), poids_pct: r1(p.valeur / tot * 100),
+        plus_value_eur: arr(p.plLat), plus_value_pct: r1(p.plPct), gain_total_ligne_eur: complet ? arr(b.flux + p.valeur) : null,
+        dividendes_nets_eur: mv.length ? arr(b ? b.div : 0) : null,
+        perf_cours_1_mois_pct: r1(Fn_PerformanceSerie(s, ilYa(31))), perf_cours_6_mois_pct: r1(Fn_PerformanceSerie(s, ilYa(183))),
+        perf_cours_1_an_pct: r1(Fn_PerformanceSerie(s, ilYa(365))), operations: ops(l) };
     }),
+    lignes_vendues: Object.values(lignes).filter(l => !detenus.has(l.isin)).map(l => {
+      const nom = Fn_NomTitre(l.isin);
+      return { nom, anciens_noms: anciens(l.isin, nom), isin: l.isin, du: l.ops[0].date, au: l.ops[l.ops.length - 1].date,
+        resultat_eur: bil[l.isin] ? arr(bil[l.isin].flux) : null, sorti_sans_vente: qteFin(l) || undefined };
+    }),
+    historique_mensuel: !g ? [] : hist.jours.map((j, i) => i).filter(i => i === n || hist.jours[i + 1].slice(0, 7) !== hist.jours[i].slice(0, 7))
+      .map(i => ({ fin: hist.jours[i], valeur_eur: arr(hist.valeurs[i]), verse_cumule_eur: arr(g.verses[i]), gain_pct: r1(g.vals[i]) })),
     indicateurs: Fn_EvaluerTous(k).map(r => ({ nom: r.ind.nom, valeur: r.statut === 'attente' ? null : Fn_FmtIndicateur(r.ind, r.valeur), etat: Cst_Etats[r.statut][1], detail: r.statut === 'attente' ? r.manquant : r.detail }))
   };
 }
 function Fn_ConsignesAnalyse(web) {
   return 'Tu aides un particulier à suivre son portefeuille d’actions, détenu chez DEGIRO sur un compte sans crédit (ni marge, ni produits à levier, ni vente à découvert). '
-    + 'Tu reçois ses chiffres en JSON : positions avec poids, plus-values, tendances de cours, et des indicateurs déjà calculés.\n\n'
-    + 'Ta mission :\n1. repérer ce qui mérite son attention — concentration, lignes en forte perte ou en tendance baissière, devises, frais, liquidités, '
+    + 'Tu reçois ses chiffres en JSON : positions avec poids, plus-values, variations de cours, achats et ventes, dividendes, et des indicateurs déjà calculés.\n\n'
+    + 'Ta mission :\n1. repérer ce qui mérite son attention — concentration, lignes en forte perte, devises, frais, liquidités, '
     + 'événements à venir — et le formuler en avertissements clairs, du plus important au moins important ;\n'
     + '2. proposer des pistes concrètes : renforcer, alléger, vendre ou surveiller une ligne, ou une nouvelle idée d’action qui améliorerait la diversification, '
     + 'chacune justifiée par les chiffres fournis' + (web ? ' et par l’actualité trouvée' : '') + '.\n\n'
-    + (web ? 'Cherche sur le web l’actualité récente des principales lignes (résultats, prévisions, événements) et, pour une nouvelle idée, de quoi la justifier. '
+    + (web ? 'Cherche sur le web les résultats, les perspectives et l’actualité récente des principales lignes — communiqués des sociétés, sites d’analyse financière '
+      + '(MarketScreener, Morningstar, Investir), agences de presse (AFP, Reuters) — et, pour une nouvelle idée, de quoi la justifier. '
       + 'Cite les pages utilisées dans « sources ».\n' : 'Appuie-toi uniquement sur les données fournies : pas de recherche, pas d’actualité supposée.\n')
-    + 'Règles : français simple ; aucun chiffre inventé ; dis quand une information manque ou est incertaine ; '
+    + 'Règles : pas d’analyse technique (moyennes mobiles, supports, figures de graphique) ; français simple ; aucun chiffre inventé ; dis quand une information manque ou est incertaine ; '
     + 'la décision appartient à l’investisseur, tes propositions ne sont pas des ordres.\n'
     + 'Termine en appelant l’outil « rapport » une seule fois, avec ta synthèse, tes avertissements et tes propositions.';
+}
+/* ANALYSE COMPLÈTE DANS L'APP CLAUDE : une demande autonome (consignes + chiffres) copiée dans le presse-papier, puis Claude
+   s'ouvre. Claude y fait lui-même ses recherches sur le web, dans le cadre de l'abonnement : rien n'est facturé sur la clé API.
+   Fondamentaux et actualité seulement : l'analyse technique est écartée. */
+function Fn_DemandeApp(k) {
+  const d = Fn_DonneesAnalyse(k);
+  return [
+    'Tu es analyste financier indépendant. Fais une revue COMPLÈTE de mon portefeuille d’actions, fondée sur les fondamentaux des sociétés et sur l’actualité. '
+      + 'Mes chiffres, tirés de mon compte le ' + d.date + ', sont en JSON à la fin de ce message. Mon compte : compte-titres DEGIRO sans crédit '
+      + '(ni marge, ni levier, ni vente à découvert) ; je suis un particulier, fiscalité française.',
+    '1. PAS D’ANALYSE TECHNIQUE : ni graphique, ni support ou résistance, ni moyenne mobile, ni RSI, MACD, figure chartiste ou « momentum ». '
+      + 'Les variations de cours du JSON servent seulement à poser la question « pourquoi ? » ; réponds-y par des faits.',
+    '2. CHERCHE SUR LE WEB, pour chaque ligne, de la plus grosse à la plus petite :\n'
+      + '- sources primaires : communiqués de résultats, rapport annuel, présentation aux investisseurs (rubrique « Investisseurs » du site de la société), '
+      + 'documents réglementaires (AMF, SEC EDGAR, annonces RNS de Londres, Euronext) ;\n'
+      + '- analyse financière : MarketScreener (ex-Zonebourse), Morningstar, Investir (Les Échos), Le Revenu, Boursorama, Yahoo Finance (statistiques, '
+      + 'estimations des analystes), stockanalysis.com, Seeking Alpha (partie gratuite) ;\n'
+      + '- actualité : dépêches AFP et Reuters (reprises notamment par Boursorama, Le Figaro, Challenges, MarketScreener), Les Échos, Le Monde, L’Agefi, '
+      + 'BFM Business, Financial Times, Bloomberg, Wall Street Journal, CNBC, et la presse économique du pays de la société.\n'
+      + 'Page réservée aux abonnés : dis-le et prends une autre source, sans contourner l’accès.',
+    '3. POUR CHAQUE LIGNE, une fiche :\n'
+      + '- l’activité en une phrase, et ce qui fait gagner de l’argent à la société ;\n'
+      + '- les derniers résultats publiés (avec leur date) : chiffre d’affaires et croissance, marge opérationnelle, résultat net, flux de trésorerie disponible, '
+      + 'dette nette ; au-dessus ou en dessous des attentes ;\n'
+      + '- les perspectives annoncées par la direction : relevées, maintenues ou abaissées ;\n'
+      + '- la valorisation : PER actuel et attendu, VE/EBITDA ou le ratio adapté au secteur (banque, assurance, foncière…), rendement du dividende, comparés à '
+      + 'l’historique de la société et à ses concurrents ; le consensus des analystes (nombre, recommandations, objectif de cours moyen, date) ; '
+      + 'la juste valeur de Morningstar si elle est publique ;\n'
+      + '- le dividende : montant, couverture par les bénéfices, prochain détachement ;\n'
+      + '- l’actualité des six derniers mois qui compte : contrats, acquisitions, litiges, réglementation, direction, avertissement sur résultats, '
+      + 'rachats d’actions, augmentation de capital, achats ou ventes des dirigeants ;\n'
+      + '- pourquoi le cours a monté ou baissé (variations du JSON) ;\n'
+      + '- ce qui est solide, ce qui inquiète, et si la thèse d’investissement tient toujours ; pour une ligne en forte perte, dis si la baisse vient '
+      + 'd’un problème durable de l’entreprise ou d’un excès du marché ;\n'
+      + '- ton avis : renforcer, conserver, alléger, vendre ou surveiller, avec la raison principale et ce qui te ferait changer d’avis.',
+    '4. LE PORTEFEUILLE ENTIER :\n'
+      + '- diversification : secteurs, pays, devises, taille des sociétés, dépendance à un même facteur (taux, pétrole, Chine, dollar, consommation…) ;\n'
+      + '- concentration, liquidités, frais, dividendes ;\n'
+      + '- l’évolution du gain sur l’argent versé (« gain_sur_verse », « historique_mensuel ») : quelles lignes et quels faits l’expliquent, '
+      + 'quelle part tient au change et aux nouveaux versements ;\n'
+      + '- deux à cinq idées nouvelles (actions ou ETF) qui amélioreraient l’ensemble, justifiées par leurs fondamentaux et leur valorisation, avec sources ; '
+      + 'un titre déjà vendu (« lignes_vendues ») seulement en disant ce qui a changé depuis.',
+    '5. PRÉSENTATION :\n'
+      + 'a) synthèse en cinq à huit lignes ;\nb) alertes, de la plus importante à la moins importante ;\n'
+      + 'c) tableau : ligne · poids · plus-value · valorisation · consensus · ton avis ;\nd) les fiches ;\ne) le portefeuille entier, puis les idées nouvelles ;\n'
+      + 'f) calendrier des trois prochains mois : résultats, assemblées générales, détachements de dividende ;\ng) sources : titre, site, date, lien.\n'
+      + 'Si tout ne tient pas dans une réponse, arrête-toi après une fiche complète et termine par : « Écris “continue” pour la suite. »',
+    '6. RÈGLES : chaque chiffre et chaque fait avec sa source et sa date ; des informations récentes, et signale celles qui datent ; '
+      + 'sépare les faits, l’avis des analystes et ton propre avis ; si une information manque ou si les sources se contredisent, dis-le, n’invente rien ; '
+      + 'français simple, termes techniques expliqués en quelques mots (PER, VE/EBITDA…) ; la décision m’appartient : tes avis ne sont ni des ordres '
+      + 'ni un conseil personnalisé.',
+    'LES DONNÉES : montants en euros, change compris au taux réel de chaque transaction. « cours » et « pru » (prix de revient unitaire, frais exclus) '
+      + 'dans la devise de cotation (GBX = pence). « poids_pct » : part de la valeur des titres. « plus_value_pct » : en euros, change compris. '
+      + '« perf_cours_… » : variation du cours, en devise. « gain_total_ligne_eur » : plus-value latente + résultat des ventes + dividendes − frais. '
+      + '« operations » : achats et ventes datés. « lignes_vendues » : titres détenus autrefois et leur résultat en euros. '
+      + '« historique_mensuel » : valeur du compte et argent versé cumulé, en fin de mois. « indicateurs » : calculés par mon application.',
+    '```json\n' + JSON.stringify(d, null, 1) + '\n```'
+  ].join('\n\n');
+}
+const Cst_UrlClaude = 'https://claude.ai/new';
+async function Fn_AnalyseApp() {
+  const texte = Fn_DemandeApp(Fn_Calculs());
+  let copie = true;
+  try { await navigator.clipboard.writeText(texte); } catch (e) { copie = false; }
+  if (copie) window.open(Cst_UrlClaude, '_blank', 'noopener');
+  $('analyse-app').innerHTML = '<div class="note ' + (copie ? 'note-ok' : 'note-warn') + '">'
+    + (copie ? 'Demande copiée (' + Fmt_Nb(texte.length, 0) + ' caractères). Dans Claude : appui long → <b>Coller</b>, vérifiez que la recherche web est active '
+      + '(le mode « Recherche », s’il est proposé, fouille encore plus de sites), puis envoyez.'
+      : 'Le navigateur a refusé la copie : copiez le texte ci-dessous (appui long → Tout sélectionner → Copier).')
+    + ' <a href="' + Cst_UrlClaude + '" target="_blank" rel="noopener noreferrer">Ouvrir Claude ↗</a></div>'
+    + '<details' + (copie ? '' : ' open') + '><summary>Voir la demande</summary><textarea readonly rows="10">' + Fn_Esc(texte) + '</textarea></details>';
 }
 function Fn_EstimationAnalyse(web, m) {
   const p = Cst_Modeles[m], entree = (Fn_ConsignesAnalyse(web).length + JSON.stringify(Fn_DonneesAnalyse(Fn_Calculs())).length + 3000) / 3;
@@ -2003,6 +2109,7 @@ function Fn_RendreAnalyse() {
     : '<div class="note note-warn">Aucune clé API dans ce navigateur. Saisissez-la dans Vigie (Paramètres → Accès API) ou ici : les deux pages partagent la même.'
       + '<div class="reglage"><input type="password" id="i-cle" placeholder="sk-ant-…" autocomplete="off" style="flex:1;min-width:180px"><button id="b-cle">Enregistrer</button></div></div>';
   if ($('b-cle')) $('b-cle').onclick = () => { const v = $('i-cle').value.trim(); if (v) { Ecrire_Local(Cst_CleApi, v); Fn_RendreAnalyse(); } };
+  $('b-analyse-app').onclick = Fn_AnalyseApp;
   $('b-analyse-rapide').onclick = () => Fn_DemanderAnalyse(false);
   $('b-analyse-web').onclick = () => Fn_DemanderAnalyse(true);
   const a = (Var_Etat.analyses || [])[0];
