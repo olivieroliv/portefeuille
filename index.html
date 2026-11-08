@@ -151,7 +151,13 @@ select { max-width: 100%; }
     <div class="reglage"><select id="s-titre" aria-label="Titre"></select></div>
     <div class="choix" id="b-periodes" role="group" aria-label="Période"></div>
     <div class="choix" id="b-resolution" role="group" aria-label="Résolution"></div>
+    <div class="legende" id="cours-legende"></div>
     <div class="graphe" id="g-cours"></div>
+    <div id="bloc-ecart">
+      <h2 style="margin-top:12px">Écart du cours à votre PRU</h2>
+      <div class="muet" id="ecart-sous"></div>
+      <div class="graphe" id="g-ecart"></div>
+    </div>
     <div id="cours-stats"></div>
     <details><summary>Réglages des cours (accès GitHub, symboles)</summary><div id="r-cours"></div></details>
   </section>
@@ -661,10 +667,10 @@ function Fn_Operations(mouvements, isin, liens) {
     if (!r || Cst_ReChangementIsin.test(m.desc)) return;
     const qte = Fn_Nombre(r[3]), prix = Fn_Nombre(r[4]);
     if (qte == null || prix == null) return;
-    out.push({ date: m.date, type: /^(achat|buy)/i.test(r[2]) ? 'achat' : 'vente', qte, prix, dev: r[5] || m.dev, montant: m.montant, devMontant: m.dev,
+    out.push({ date: m.date, heure: m.heure || '', type: /^(achat|buy)/i.test(r[2]) ? 'achat' : 'vente', qte, prix, dev: r[5] || m.dev, montant: m.montant, devMontant: m.dev,
       ost: r[1] ? r[1].trim() : '', herite });
   });
-  return out.sort((a, b) => a.date < b.date ? -1 : 1);
+  return out.sort((a, b) => (a.date + a.heure) < (b.date + b.heure) ? -1 : (a.date + a.heure) > (b.date + b.heure) ? 1 : 0);   // même jour : dans l'ordre des heures
 }
 /* NOMS SUCCESSIFS d'un titre : chaque mouvement du relevé porte le nom du produit À SA DATE. Deux écritures du
    même nom (« ALSTOM » et « Alstom SA ») ne font pas un renommage ; un autre nom, si. */
@@ -735,6 +741,64 @@ function Fn_VersementsProbables(captures, mouvements, corrections) {
     if (Math.abs(ecart - connus) > marge) out.push({ du, au, montant: ecart - connus });
   }
   return out;
+}
+/* LIGNES DU COMPTE DANS LE TEMPS, depuis le relevé : quantité et PRU après chaque opération. PRU = prix moyen pondéré
+   des achats, frais exclus ; une vente ne le change pas ; une ligne soldée repart de zéro ; actions gratuites à 0 €.
+   C'est le calcul de DEGIRO : vérifié sur les 18 lignes d'un compte réel, au millième près. Les fonds monétaires
+   (transferts internes) n'en sont pas : leur argent reste compté dans les liquidités. */
+function Fn_Lignes(mouvements, corrections, liens) {
+  const remplaces = new Set((liens || []).map(l => l.de));
+  const utiles = (mouvements || []).filter(m => Fn_Classer(m, corrections) !== 'interne');
+  const isins = [...new Set(utiles.filter(m => /^[A-Z]{2}[A-Z0-9]{9}\d$/.test(m.isin || '') && !remplaces.has(m.isin)).map(m => m.isin))];
+  const out = {};
+  isins.forEach(isin => {
+    const ops = Fn_Operations(utiles, isin, liens);
+    if (!ops.length) return;
+    let q = 0, cout = 0;
+    const etats = [], apres = [];
+    ops.forEach(o => {
+      if (o.type === 'achat') { cout += o.qte * o.prix; q += o.qte; }
+      else { if (q > 0) cout -= o.qte * cout / q; q -= o.qte; if (q <= 1e-9) { q = 0; cout = 0; } }
+      const e = { date: o.date, qte: q, pru: q > 0 ? cout / q : null, prix: o.prix, dev: o.dev };
+      apres.push(e);
+      if (etats.length && etats[etats.length - 1].date === o.date) etats[etats.length - 1] = e; else etats.push(e);   // état en fin de journée
+    });
+    out[isin] = { isin, dev: ops[ops.length - 1].dev, ops, apres, etats };
+  });
+  return out;
+}
+// État d'une ligne à une date (fin de journée) : { qte, pru, prix de la dernière opération } ; null avant le premier achat.
+function Fn_EtatAu(ligne, jour) {
+  let e = null;
+  for (const x of ligne.etats) { if (x.date > jour) break; e = x; }
+  return e;
+}
+/* VALEUR DU COMPTE JOUR PAR JOUR (jours ouvrés) depuis le premier mouvement du relevé : quantités × clôtures, en euros
+   au change de la BCE, + liquidités (cumul des mouvements par devise, hors transferts internes). Un titre sans cours ce
+   jour-là est compté au prix de sa dernière opération : cette part est dite « estimée ». serieDe(isin) → série ou null. */
+function Fn_ValeurHistorique(mouvements, corrections, liens, serieDe, fx, jusqua) {
+  const mv = (mouvements || []).slice().sort((a, b) => (a.date + a.heure) < (b.date + b.heure) ? -1 : (a.date + a.heure) > (b.date + b.heure) ? 1 : 0);
+  if (!mv.length) return null;
+  const lignes = Object.values(Fn_Lignes(mv, corrections, liens));
+  const fin = jusqua || Fn_Jour(Date.now()), jours = [], valeurs = [], titres = [], estimees = [], cash = {};
+  let k = 0;
+  for (let d = new Date(mv[0].date + 'T12:00:00Z'); ; d.setUTCDate(d.getUTCDate() + 1)) {
+    const j = d.toISOString().slice(0, 10);
+    if (j > fin) break;
+    while (k < mv.length && mv[k].date <= j) { const m = mv[k++]; if (Fn_Classer(m, corrections) !== 'interne') cash[m.dev] = (cash[m.dev] || 0) + m.montant; }
+    if (d.getUTCDay() === 0 || d.getUTCDay() === 6) continue;
+    let v = 0, vt = 0, est = 0;
+    Object.keys(cash).forEach(dev => { if (Math.abs(cash[dev]) < 0.005) return; const t = Fn_TauxAu(fx, dev, j); if (t) v += cash[dev] / t; });
+    lignes.forEach(l => {
+      const e = Fn_EtatAu(l, j); if (!e || !e.qte) return;
+      const s = serieDe(l.isin), c = s ? Fn_ValeurAu(s, j) : null;
+      const prix = c != null ? c : e.prix, dev = c != null ? s.devise : e.dev, t = Fn_TauxAu(fx, dev, j);
+      if (!t) return;
+      const x = e.qte * prix / t; vt += x; if (c == null) est += x;
+    });
+    jours.push(j); valeurs.push(v + vt); titres.push(vt); estimees.push(est);
+  }
+  return { jours, valeurs, titres, estimees };
 }
 /* OUTILS COMMUNS DES INDICATEURS (ctx.outils, voir indicateurs.js). fx : { USD: série BCE, GBP: …, … }. */
 function Fn_OutilsIndicateurs(ctx, fx) {
@@ -900,7 +964,7 @@ function Fn_Calculs() {
   const verse = releve ? flux.reduce((s, f) => s + f.montant, 0) : null;
   const fluxX = Fn_FluxXirr(flux, vl, c.ts);
   const xirr = Fn_Xirr(fluxX);
-  const premier = flux.length ? flux[0].date : null;
+  const premier = flux.length ? flux.reduce((m, f) => f.date < m ? f.date : m, flux[0].date) : null;   // le plus ancien, quel que soit l'ordre
   const bilan = releve ? Fn_Bilan(mv.filter(x => x.date <= jour), Var_Etat.corrections, Fn_Taux(mv, Var_Etat.corrections)) : null;
   const somme = types => types.reduce((s, t) => s + (bilan.parType[t] ? bilan.parType[t].eur : 0), 0);
   const approx = types => types.some(t => bilan.parType[t] && (bilan.parType[t].approx || bilan.parType[t].sansTaux));
@@ -941,7 +1005,7 @@ function Fn_RendreSynthese(k) {
 
 /* ---------- diagrammes (SVG à la main, sans bibliothèque) ---------- */
 const NS = 'http://www.w3.org/2000/svg';
-function El(tag, at, parent) { const e = document.createElementNS(NS, tag); Object.keys(at || {}).forEach(k => e.setAttribute(k, at[k])); if (parent) parent.appendChild(e); return e; }
+function El(tag, at, parent) { const e = document.createElementNS(NS, tag); Object.keys(at || {}).forEach(k => { if (at[k] != null) e.setAttribute(k, at[k]); }); if (parent) parent.appendChild(e); return e; }
 function Txt(at, texte, parent) { const e = El('text', at, parent); e.textContent = texte; return e; }
 function Fn_Bulle(conteneur) {
   let b = conteneur.querySelector('.bulle');
@@ -1016,7 +1080,95 @@ function Fn_PasRond(etendue) {
   const brut = etendue / 4, p = Math.pow(10, Math.floor(Math.log10(brut || 1)));
   return [1, 2, 2.5, 5, 10].map(k => k * p).find(s => s >= brut) || 10 * p;
 }
+/* Valeur du compte reconstituée depuis le premier jour (relevé × cours) : calculée une fois par jeu de données. */
+let Var_Memo = {};
+function Fn_LignesMemo() {
+  const mv = Fn_Mouvements(), cle = mv.length + '|' + (mv.length ? mv[mv.length - 1].cle : '') + '|' + JSON.stringify(Var_Etat.corrections || {});
+  if (Var_Memo.lignesCle !== cle) { Var_Memo.lignesCle = cle; Var_Memo.lignes = mv.length ? Fn_Lignes(mv, Var_Etat.corrections, Fn_Liens()) : {}; Var_Memo.histCle = null; }
+  return Var_Memo.lignes;
+}
+function Fn_Historique() {
+  const mv = Fn_Mouvements(), nb = Object.keys(Var_Cours.series || {}).length;
+  if (!mv.length || !nb) return null;
+  Fn_LignesMemo();
+  const cle = Var_Memo.lignesCle + '|' + Var_Cours.sha + '|' + nb + '|' + Fn_Jour(Date.now());
+  if (Var_Memo.histCle !== cle) { Var_Memo.histCle = cle; Var_Memo.hist = Fn_ValeurHistorique(mv, Var_Etat.corrections, Fn_Liens(), Fn_Serie, Fn_Fx()); }
+  return Var_Memo.hist;
+}
+function Fn_GrapheEvolutionHisto(hist) {
+  const zone = $('g-evolution'); zone.innerHTML = '';
+  const sous = $('evolution-sous'), leg = $('evolution-legende');
+  const T = j => Date.parse(j + 'T12:00:00');
+  const pts = hist.jours.map((j, i) => ({ t: T(j), j, v: hist.valeurs[i], est: hist.valeurs[i] > 0 && hist.estimees[i] / hist.valeurs[i] > 0.05 }));
+  const caps = Var_Etat.captures.filter(c => c.marge && c.marge.vl != null).map(c => ({ t: c.ts, v: c.marge.vl }));
+  const tMin = pts[0].t, tMax = Math.max(pts[pts.length - 1].t, caps.length ? caps[caps.length - 1].t : 0);
+  // Versements nets cumulés : une marche par versement ou retrait, dans l'ordre des dates.
+  const flux = Fn_Flux(Fn_Mouvements(), Var_Etat.corrections).flux.slice().sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+  let cumul = 0; const marches = [{ t: tMin, v: 0 }];
+  flux.forEach(f => { cumul += f.montant; marches.push({ t: T(f.date), v: cumul }); });
+  marches.push({ t: tMax, v: cumul });
+  const verseAu = t => { let v = 0; for (const m of marches) { if (m.t > t) break; v = m.v; } return v; };
+  const nbEst = pts.filter(p => p.est).length;
+  sous.textContent = 'Valeur du compte reconstituée chaque jour ouvré depuis le ' + Fmt_Jour(pts[0].j) + ' : quantités et liquidités du relevé × cours de clôture (change BCE). '
+    + (caps.length ? 'Points : vos captures. ' : '')
+    + (nbEst ? 'En pointillés : jours où plus de 5 % de la valeur est estimée (titres sans cours, comptés au prix de leur dernière opération) — les cours manquants arrivent au fil des soirées.' : '');
+  leg.innerHTML = '<span><i style="background:var(--serie-1)"></i>Valeur nette</span><span><i style="background:var(--serie-2)"></i>Versements nets cumulés</span>'
+    + (caps.length ? '<span><i style="background:var(--encre);border-radius:50%"></i>Captures</span>' : '');
+  const W = zone.clientWidth, H = 250, g = 58, d = 64, h = 12, b = 26;
+  const vMaxBrut = Math.max(...pts.map(p => p.v), cumul, ...caps.map(c => c.v));
+  const pas = Fn_PasRond(vMaxBrut * 0.8), vMin = 0, vMax = Math.ceil(vMaxBrut * 1.05 / pas) * pas;
+  const X = t => g + (W - g - d) * (t - tMin) / ((tMax - tMin) || 1), Y = v => h + (H - h - b) * (1 - (v - vMin) / ((vMax - vMin) || 1));
+  const svg = El('svg', { viewBox: '0 0 ' + W + ' ' + H, height: H, role: 'img', 'aria-label': 'Évolution de la valeur nette depuis l’ouverture (valeurs par mois dans le tableau sous le graphique)' }, zone);
+  for (let v = vMin; v <= vMax + pas / 2; v += pas) {
+    El('line', { x1: g, x2: W - d, y1: Y(v), y2: Y(v), stroke: v === vMin ? 'var(--axe)' : 'var(--grille)', 'stroke-width': 1 }, svg);
+    Txt({ x: g - 6, y: Y(v) + 4, 'text-anchor': 'end', class: 'axe-txt' }, Fmt_Compact(v), svg);
+  }
+  // Une étiquette par année (1er janvier), espacées d'au moins 34 px.
+  const an0 = new Date(tMin).getFullYear(), an1 = new Date(tMax).getFullYear(); let xPrec = -1e9;
+  for (let a = an0 + 1; a <= an1; a++) { const x = X(new Date(a, 0, 1, 12).getTime()); if (x - xPrec < 34) continue; xPrec = x;
+    El('line', { x1: x, x2: x, y1: H - b, y2: H - b + 4, stroke: 'var(--axe)', 'stroke-width': 1 }, svg); Txt({ x, y: H - 6, 'text-anchor': 'middle', class: 'axe-txt' }, String(a), svg); }
+  let dd = 'M' + X(marches[0].t) + ',' + Y(marches[0].v);
+  for (let i = 1; i < marches.length; i++) dd += 'H' + X(marches[i].t) + 'V' + Y(marches[i].v);
+  El('path', { d: dd, fill: 'none', stroke: 'var(--serie-2)', 'stroke-width': 2, 'stroke-linejoin': 'round' }, svg);
+  // Valeur : trait plein quand elle est mesurée, pointillés quand une part notable est estimée.
+  let i = 0;
+  while (i < pts.length - 1) {
+    const est = pts[i].est; let j = i;
+    while (j < pts.length - 1 && pts[j + 1].est === est) j++;
+    const fin = Math.min(j + 1, pts.length - 1);
+    El('path', { d: 'M' + pts.slice(i, fin + 1).map(p => X(p.t).toFixed(1) + ',' + Y(p.v).toFixed(1)).join('L'), fill: 'none', stroke: 'var(--serie-1)', 'stroke-width': 2,
+      'stroke-linejoin': 'round', 'stroke-linecap': 'round', 'stroke-dasharray': est ? '4 3' : null }, svg);
+    i = fin;
+  }
+  caps.forEach(c => El('circle', { cx: X(c.t), cy: Y(c.v), r: 4, fill: 'var(--encre)', stroke: 'var(--surface)', 'stroke-width': 2 }, svg));
+  const dernier = pts[pts.length - 1];
+  Txt({ x: X(dernier.t) + 9, y: Y(dernier.v) + 4, class: 'fort' }, Fmt_Compact(dernier.v), svg);
+  const bulle = Fn_Bulle(zone);
+  const reticule = El('line', { y1: h, y2: H - b, stroke: 'var(--axe)', 'stroke-width': 1, visibility: 'hidden' }, svg);
+  const point = El('circle', { r: 5, fill: 'var(--serie-1)', stroke: 'var(--surface)', 'stroke-width': 2, visibility: 'hidden' }, svg);
+  const cible = El('rect', { x: g, y: 0, width: W - g - d, height: H - b, fill: 'transparent' }, svg);
+  const suivre = ev => {
+    const r = svg.getBoundingClientRect(), x = (ev.clientX - r.left) * W / r.width;
+    const tt = tMin + (x - g) / (W - g - d) * (tMax - tMin);
+    let a = 0, z = pts.length - 1; while (a < z) { const m = (a + z) >> 1; if (pts[m].t < tt) a = m + 1; else z = m; }
+    const p = pts[a > 0 && Math.abs(pts[a - 1].t - tt) < Math.abs(pts[a].t - tt) ? a - 1 : a], verse = verseAu(p.t);
+    const cap = caps.find(c => Fn_Jour(c.t) === p.j);
+    reticule.setAttribute('x1', X(p.t)); reticule.setAttribute('x2', X(p.t)); reticule.setAttribute('visibility', 'visible');
+    point.setAttribute('cx', X(p.t)); point.setAttribute('cy', Y(p.v)); point.setAttribute('visibility', 'visible');
+    bulle.montrer('<b>' + Fmt_Jour(p.j) + '</b><br>Valeur nette ' + (p.est ? '≈ ' : '') + Fmt_Eur(p.v) + '<br>Versements nets ' + Fmt_Eur(verse)
+      + '<br>Gain ' + Fmt_Signe(p.v - verse) + (cap ? '<br>Capture : ' + Fmt_Eur(cap.v) : ''), X(p.t), Y(p.v), Y(p.v));
+  };
+  cible.addEventListener('pointermove', suivre); cible.addEventListener('pointerdown', suivre);
+  cible.addEventListener('pointerleave', () => { bulle.cacher(); reticule.setAttribute('visibility', 'hidden'); point.setAttribute('visibility', 'hidden'); });
+  // Tableau : dernier jour ouvré de chaque mois, du plus récent au plus ancien.
+  const mois = []; pts.forEach((p, k) => { if (k === pts.length - 1 || pts[k + 1].j.slice(0, 7) !== p.j.slice(0, 7)) mois.push(p); });
+  $('t-evolution').innerHTML = '<table><thead><tr><th>Fin de mois</th><th>Valeur nette</th><th>Versements nets</th><th>Gain</th></tr></thead><tbody>'
+    + mois.reverse().map(p => { const v = verseAu(p.t); return '<tr><td>' + Fmt_Jour(p.j) + '</td><td>' + (p.est ? '≈ ' : '') + Fmt_Eur(p.v) + '</td><td>' + Fmt_Eur(v)
+      + '</td><td class="' + Cls_Signe(p.v - v) + '">' + Fmt_Signe(p.v - v) + '</td></tr>'; }).join('') + '</tbody></table>';
+}
 function Fn_GrapheEvolution(k) {
+  const hist = Fn_Historique();
+  if (hist && hist.jours.length > 20) return Fn_GrapheEvolutionHisto(hist);
   const zone = $('g-evolution'); zone.innerHTML = '';
   const pts = Var_Etat.captures.filter(c => c.marge && c.marge.vl != null).map(c => ({ t: c.ts, v: c.marge.vl, c }));
   const sous = $('evolution-sous'), leg = $('evolution-legende');
@@ -1389,7 +1541,7 @@ function Fn_TitresCours() {
 function Fn_RendreCours() {
   const c = Fn_Derniere();
   // Sans capture : seulement les réglages (la clé d'accès se colle avant la première capture, qui écrase le presse-papier).
-  ['s-titre', 'b-periodes', 'b-resolution', 'g-cours', 'cours-stats'].forEach(id => { const e = $(id); (e.closest('.reglage') || e).classList.toggle('cache', !c); });
+  ['s-titre', 'b-periodes', 'b-resolution', 'cours-legende', 'g-cours', 'bloc-ecart', 'cours-stats'].forEach(id => { const e = $(id); (e.closest('.reglage') || e).classList.toggle('cache', !c); });
   if (!c) { $('cours-etat').textContent = Lire_Local(Cst_CleJeton) ? 'Clé d’accès enregistrée. Les graphiques des cours s’afficheront après la première capture.'
     : 'Collez ici la clé d’accès GitHub (réglages ci-dessous) ; les graphiques des cours s’afficheront après la première capture.'; Fn_RendreReglagesCours(); return; }
   const jeton = !!Lire_Local(Cst_CleJeton), idx = Var_Cours.index;
@@ -1423,12 +1575,14 @@ function Fn_RendreCours() {
   const pos = c.positions.find(p => p.isin === Var_Vue.isin) || null;
   const pts = Var_Vue.isin ? Fn_PointsCours(Var_Vue.isin, Var_Vue.periode, Var_Vue.resolution) : null;
   const ops = Var_Vue.resolution === 'jour' ? Fn_Operations(Fn_Mouvements(), Var_Vue.isin, Fn_Liens()) : [];
-  Fn_GrapheCours(pts, pos, ops);
-  Fn_RendreStatsCours(pts, pos, ops);
+  const ligne = Fn_LignesMemo()[Var_Vue.isin] || null;
+  Fn_GrapheCours(pts, pos, ops, ligne);
+  Fn_GrapheEcartPru(pts, ligne);
+  Fn_RendreStatsCours(pts, pos, ops, ligne);
   Fn_RendreReglagesCours();
 }
-function Fn_GrapheCours(pts, pos, ops) {
-  const zone = $('g-cours'); zone.innerHTML = '';
+function Fn_GrapheCours(pts, pos, ops, ligne) {
+  const zone = $('g-cours'); zone.innerHTML = ''; $('cours-legende').innerHTML = '';
   if (!pts || pts.length < 2) {
     const intro = Var_Cours.index && (Var_Cours.index.introuvables || []).find(x => x.isin === Var_Vue.isin);
     zone.innerHTML = '<div class="muet" style="padding:16px 0">' + (intro ? 'Titre introuvable chez Yahoo Finance (renommé, radié ou autre place) : corrigez son symbole dans les réglages ci-dessous.'
@@ -1438,9 +1592,15 @@ function Fn_GrapheCours(pts, pos, ops) {
   const W = zone.clientWidth, H = 230, g = 54, d = 12, h = 12, b = 26, dev = (pos && pos.dev) || (Fn_Serie(Var_Vue.isin) || {}).devise || '';
   const vals = pts.map(p => p.v);
   let vMin = Math.min(...vals), vMax = Math.max(...vals);
-  const pru = pos && pos.pru > 0 ? pos.pru : null;
+  // PRU de chaque jour d'après le relevé (achats successifs) ; à défaut, le PRU de la capture, en trait fixe.
+  const pruJour = ligne ? pts.map(p => { const e = Fn_EtatAu(ligne, p.jour); return e && e.qte && e.pru > 0 ? e.pru : null; }) : null;
+  const pruHisto = !!pruJour && pruJour.some(x => x != null);
+  const pru = !pruHisto && pos && pos.pru > 0 ? pos.pru : null;
   const pruVisible = pru != null && pru >= vMin * 0.7 && pru <= vMax * 1.3;
   if (pruVisible) { vMin = Math.min(vMin, pru); vMax = Math.max(vMax, pru); }
+  if (pruHisto) { const v0 = vMin, v1 = vMax; pruJour.forEach(x => { if (x != null && x >= v0 * 0.6 && x <= v1 * 1.6) { vMin = Math.min(vMin, x); vMax = Math.max(vMax, x); } }); }
+  $('cours-legende').innerHTML = '<span><i style="background:var(--serie-1)"></i>Cours</span>'
+    + (pruHisto ? '<span><i style="background:var(--serie-2)"></i>Votre PRU (relevé)</span>' : pruVisible ? '<span><i style="background:var(--muet)"></i>PRU</span>' : '');
   const ecart = Math.max(vMax - vMin, vMax * 0.01); vMin -= ecart * 0.08; vMax += ecart * 0.08;
   const X = i => g + (W - g - d) * i / (pts.length - 1), Y = v => h + (H - h - b) * (1 - (v - vMin) / (vMax - vMin));
   const svg = El('svg', { viewBox: '0 0 ' + W + ' ' + H, height: H, role: 'img', 'aria-label': 'Cours de ' + ((pos && pos.nom) || Var_Vue.isin) }, zone);
@@ -1454,6 +1614,17 @@ function Fn_GrapheCours(pts, pos, ops) {
   if (pruVisible) {
     El('line', { x1: g, x2: W - d, y1: Y(pru), y2: Y(pru), stroke: 'var(--muet)', 'stroke-width': 1 }, svg);
     Txt({ x: g + 4, y: Y(pru) - 4, class: 'axe-txt' }, 'PRU ' + fmt(pru), svg);
+  }
+  if (pruHisto) {
+    // Une marche par achat : le PRU ne bouge qu'à un achat (une vente ne le change pas), il disparaît quand la ligne est soldée.
+    let dd = '', prec = null, dernierI = -1;
+    pruJour.forEach((x, i) => {
+      if (x == null || x < vMin || x > vMax) { prec = null; return; }
+      dd += prec == null ? 'M' + X(i).toFixed(1) + ',' + Y(x).toFixed(1) : 'H' + X(i).toFixed(1) + 'V' + Y(x).toFixed(1);
+      prec = x; dernierI = i;
+    });
+    if (dd) El('path', { d: dd, fill: 'none', stroke: 'var(--serie-2)', 'stroke-width': 2, 'stroke-linejoin': 'round' }, svg);
+    if (dernierI >= 0) Txt({ x: X(dernierI) - 4, y: Y(pruJour[dernierI]) - 6, 'text-anchor': 'end', class: 'axe-txt' }, 'PRU ' + fmt(pruJour[dernierI]), svg);
   }
   El('path', { d: 'M' + pts.map((p, i) => X(i).toFixed(1) + ',' + Y(p.v).toFixed(1)).join('L'), fill: 'none', stroke: 'var(--serie-1)', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, svg);
   // Achats (▲, sous le prix) et ventes (▼, au-dessus) du relevé, à leur date et à leur prix.
@@ -1473,12 +1644,65 @@ function Fn_GrapheCours(pts, pos, ops) {
     pt.setAttribute('cx', X(i)); pt.setAttribute('cy', Y(pts[i].v)); pt.setAttribute('visibility', 'visible');
     const var0 = (pts[i].v / pts[0].v - 1) * 100, op = visibles.filter(o => o.date === pts[i].jour);
     bulle.montrer('<b>' + Fn_Esc(pts[i].etiquette) + '</b><br>' + fmt(pts[i].v) + ' ' + Fn_Esc(dev) + ' · ' + Fmt_Pct(var0, 1, true) + ' sur la période'
+      + (pruHisto && pruJour[i] != null ? '<br>Votre PRU ' + fmt(pruJour[i]) + ' · écart ' + Fmt_Pct((pts[i].v / pruJour[i] - 1) * 100, 1, true) : '')
       + op.map(o => '<br>' + (o.type === 'achat' ? '▲ achat ' : '▼ vente ') + Fmt_Nb(o.qte, 0) + ' à ' + fmt(o.prix) + (o.ost ? ' (' + Fn_Esc(o.ost) + ')' : '')).join(''), X(i), Y(pts[i].v), Y(pts[i].v));
   };
   cible.addEventListener('pointermove', suivre); cible.addEventListener('pointerdown', suivre);
   cible.addEventListener('pointerleave', () => { bulle.cacher(); ret.setAttribute('visibility', 'hidden'); pt.setAttribute('visibility', 'hidden'); });
 }
-function Fn_RendreStatsCours(pts, pos, ops) {
+/* ÉCART DU COURS AU PRU dans le temps, en % : (cours du jour / PRU du jour − 1). Au-dessus de 0 la ligne est en gain
+   (bleu), en dessous en perte (rouge). Le PRU de chaque jour vient du relevé : chaque achat le déplace. */
+function Fn_GrapheEcartPru(pts, ligne) {
+  const bloc = $('bloc-ecart'), zone = $('g-ecart'); zone.innerHTML = '';
+  const e = pts && ligne && Var_Vue.resolution === 'jour'
+    ? pts.map(p => { const s = Fn_EtatAu(ligne, p.jour); return s && s.qte && s.pru > 0 ? { pru: s.pru, x: (p.v / s.pru - 1) * 100 } : null; }) : [];
+  const vals = e.filter(Boolean).map(z => z.x);
+  bloc.classList.toggle('cache', vals.length < 2);
+  if (vals.length < 2) return;
+  $('ecart-sous').textContent = 'Au-dessus de 0, le cours dépasse votre PRU : la ligne est en gain ; en dessous, en perte. Chaque achat déplace le PRU, donc l’écart.';
+  const W = zone.clientWidth, H = 150, g = 54, d = 12, h = 10, b = 22;
+  let vMin = Math.min(0, ...vals), vMax = Math.max(0, ...vals);
+  const marge = Math.max(vMax - vMin, 2) * 0.08; vMin -= marge; vMax += marge;
+  const X = i => g + (W - g - d) * i / (pts.length - 1), Y = v => h + (H - h - b) * (1 - (v - vMin) / (vMax - vMin));
+  const svg = El('svg', { viewBox: '0 0 ' + W + ' ' + H, height: H, role: 'img', 'aria-label': 'Écart du cours au PRU, en pourcentage' }, zone);
+  const pas = Fn_PasRond(vMax - vMin);
+  for (let v = Math.ceil(vMin / pas) * pas; v <= vMax; v += pas) {
+    El('line', { x1: g, x2: W - d, y1: Y(v), y2: Y(v), stroke: Math.abs(v) < pas / 1000 ? 'var(--axe)' : 'var(--grille)', 'stroke-width': Math.abs(v) < pas / 1000 ? 1.5 : 1 }, svg);
+    Txt({ x: g - 6, y: Y(v) + 4, 'text-anchor': 'end', class: 'axe-txt' }, (v > 0 ? '+' : '') + Fmt_Nb(v, 0) + ' %', svg);
+  }
+  const marques = W < 420 ? [0, pts.length - 1] : [0, Math.floor((pts.length - 1) / 2), pts.length - 1];
+  marques.forEach((i, k) => Txt({ x: X(i), y: H - 5, 'text-anchor': k === 0 ? 'start' : k === marques.length - 1 ? 'end' : 'middle', class: 'axe-txt' }, pts[i].etiquette, svg));
+  // Aire entre la courbe et 0 : bleue au-dessus, rouge en dessous (même aire, deux découpes).
+  const defs = El('defs', {}, svg), y0 = Y(0);
+  const haut = El('clipPath', { id: 'ecart-haut' }, defs); El('rect', { x: 0, y: 0, width: W, height: y0 }, haut);
+  const bas = El('clipPath', { id: 'ecart-bas' }, defs); El('rect', { x: 0, y: y0, width: W, height: H - y0 }, bas);
+  let aires = '', trait = '', debut = null;
+  const fermer = (i) => { if (debut != null) aires += 'L' + X(i - 1).toFixed(1) + ',' + y0.toFixed(1) + 'L' + X(debut).toFixed(1) + ',' + y0.toFixed(1) + 'Z'; debut = null; };
+  e.forEach((z, i) => {
+    if (!z) { fermer(i); return; }
+    const pt = X(i).toFixed(1) + ',' + Y(z.x).toFixed(1);
+    if (debut == null) { debut = i; aires += 'M' + pt; trait += 'M' + pt; } else { aires += 'L' + pt; trait += 'L' + pt; }
+  });
+  fermer(e.length);
+  El('path', { d: aires, fill: 'var(--gain)', opacity: 0.18, 'clip-path': 'url(#ecart-haut)' }, svg);
+  El('path', { d: aires, fill: 'var(--perte)', opacity: 0.18, 'clip-path': 'url(#ecart-bas)' }, svg);
+  El('path', { d: trait, fill: 'none', stroke: 'var(--encre-2)', 'stroke-width': 1.5, 'stroke-linejoin': 'round' }, svg);
+  const der = e.length - 1;
+  if (e[der]) Txt({ x: X(der) - 4, y: Y(e[der].x) + (e[der].x >= 0 ? -6 : 14), 'text-anchor': 'end', class: 'fort' }, Fmt_Pct(e[der].x, 1, true), svg);
+  const bulle = Fn_Bulle(zone);
+  const ret = El('line', { y1: h, y2: H - b, stroke: 'var(--axe)', 'stroke-width': 1, visibility: 'hidden' }, svg);
+  const cible = El('rect', { x: g, y: 0, width: W - g - d, height: H - b, fill: 'transparent' }, svg);
+  const fmt = v => Fmt_Nb(v, v >= 1000 ? 0 : v >= 10 ? 2 : 3);
+  const suivre = ev => {
+    const r = svg.getBoundingClientRect(), i = Math.max(0, Math.min(pts.length - 1, Math.round(((ev.clientX - r.left) * W / r.width - g) / (W - g - d) * (pts.length - 1))));
+    ret.setAttribute('x1', X(i)); ret.setAttribute('x2', X(i)); ret.setAttribute('visibility', 'visible');
+    bulle.montrer('<b>' + Fn_Esc(pts[i].etiquette) + '</b><br>' + (e[i] ? 'Écart ' + Fmt_Pct(e[i].x, 1, true) + '<br>Cours ' + fmt(pts[i].v) + ' · PRU ' + fmt(e[i].pru) : 'Ligne non détenue ce jour-là'),
+      X(i), e[i] ? Y(e[i].x) : y0, e[i] ? Y(e[i].x) : y0);
+  };
+  cible.addEventListener('pointermove', suivre); cible.addEventListener('pointerdown', suivre);
+  cible.addEventListener('pointerleave', () => { bulle.cacher(); ret.setAttribute('visibility', 'hidden'); });
+}
+function Fn_RendreStatsCours(pts, pos, ops, ligne) {
   if (!pts || pts.length < 2) { $('cours-stats').innerHTML = ''; return; }
   const v = pts.map(p => p.v), dernier = v[v.length - 1], variation = (dernier / v[0] - 1) * 100;
   const haut = Math.max(...v), bas = Math.min(...v);
@@ -1486,7 +1710,8 @@ function Fn_RendreStatsCours(pts, pos, ops) {
   const tuile = (lib, val, cls) => '<div class="tuile"><div class="lib">' + lib + '</div><div class="val ' + (cls || '') + '" style="font-size:16px">' + val + '</div></div>';
   const isin = Var_Vue.isin, nomActuel = pos ? pos.nom : ((Fn_ListeSymboles().titres.find(t => t.isin === isin) || {}).nom || '');
   const anciens = Fn_Anciens(isin, nomActuel);
-  const toutesOps = Fn_Operations(Fn_Mouvements(), isin, Fn_Liens());
+  // Avec le relevé : les opérations de la ligne et le PRU après chacune (même calcul que DEGIRO).
+  const toutesOps = ligne ? ligne.ops : Fn_Operations(Fn_Mouvements(), isin, Fn_Liens()), apres = ligne ? ligne.apres : null;
   const corr = Var_Cours.index && ((Var_Cours.index.series || []).find(s => s.id === isin) || {}).symbole;
   $('cours-stats').innerHTML = '<div class="tuiles" style="margin-top:8px">'
     + tuile('Sur la période', Fmt_Pct(variation, 1, true), Cls_Signe(variation))
@@ -1497,8 +1722,9 @@ function Fn_RendreStatsCours(pts, pos, ops) {
     + '</div><div class="muet" style="margin-top:6px">' + (pos && pos.pru && (pos.pru < bas * 0.7 || pos.pru > haut * 1.3) ? 'PRU ' + Fmt_Nb(pos.pru, 3) + ', hors du graphique · ' : '')
     + 'ISIN ' + Fn_Esc(isin) + (corr ? ' · Yahoo ' + Fn_Esc(corr) : '')
     + (anciens.length ? ' · anciens noms : ' + anciens.map(a => Fn_Esc(a.nom) + (a.du || a.au ? ' (' + (a.du ? Fmt_Jour(a.du) : '…') + ' → ' + (a.au ? Fmt_Jour(a.au) : '…') + ')' : '') + ' <span title="source">· ' + Fn_Esc(a.source) + '</span>').join(', ') : '') + '</div>'
-    + (toutesOps.length ? '<details><summary>' + toutesOps.length + ' achat(s) et vente(s) dans le relevé' + (toutesOps.some(o => o.ost) ? ', opérations sur titres comprises' : '') + '</summary><div class="defile"><table><thead><tr><th>Date</th><th>Opération</th><th>Qté</th><th>Prix</th></tr></thead><tbody>'
-      + toutesOps.slice().reverse().map(o => '<tr><td>' + Fmt_Jour(o.date) + '</td><td>' + (o.type === 'achat' ? '▲ achat' : '▼ vente') + (o.ost ? '<div class="muet">' + Fn_Esc(o.ost) + (o.herite ? ' (ancien ISIN)' : '') + '</div>' : '') + '</td><td>' + Fmt_Nb(o.qte, 0) + '</td><td>' + Fmt_Nb(o.prix, 3) + ' ' + Fn_Esc(Cst_DevSymbole[o.dev] || o.dev) + '</td></tr>').join('')
+    + (toutesOps.length ? '<details><summary>' + toutesOps.length + ' achat(s) et vente(s) dans le relevé' + (toutesOps.some(o => o.ost) ? ', opérations sur titres comprises' : '') + '</summary><div class="defile"><table><thead><tr><th>Date</th><th>Opération</th><th>Qté</th><th>Prix</th>' + (apres ? '<th>PRU après</th>' : '') + '</tr></thead><tbody>'
+      + toutesOps.map((o, k) => [o, k]).reverse().map(([o, k]) => '<tr><td>' + Fmt_Jour(o.date) + '</td><td>' + (o.type === 'achat' ? '▲ achat' : '▼ vente') + (o.ost ? '<div class="muet">' + Fn_Esc(o.ost) + (o.herite ? ' (ancien ISIN)' : '') + '</div>' : '') + '</td><td>' + Fmt_Nb(o.qte, 0) + '</td><td>' + Fmt_Nb(o.prix, 3) + ' ' + Fn_Esc(Cst_DevSymbole[o.dev] || o.dev) + '</td>'
+      + (apres ? '<td>' + (apres[k].pru != null ? Fmt_Nb(apres[k].pru, 3) : '<span class="muet">soldée</span>') + '</td>' : '') + '</tr>').join('')
       + '</tbody></table></div></details>' : '');
 }
 function Fn_RendreReglagesCours() {
