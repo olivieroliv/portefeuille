@@ -499,15 +499,19 @@ function Fn_Flux(mouvements, corrections, jusqua) {
 /* MONTANTS EN EUROS, TIRÉS DU RELEVÉ LUI-MÊME. Chaque opération de change y figure en
    deux lignes à la même minute : la devise débitée et l'euro crédité (ou l'inverse).
    Leur rapport est le taux réellement appliqué — aucun taux extérieur n'est consulté.
-   À défaut de paire, la colonne FX de la ligne en devise (1 € = FX devise) sert. */
+   À défaut de paire, la colonne FX de la ligne en devise (1 € = FX devise) sert. Deux pièges vus dans un relevé réel :
+   la colonne FX de la LIVRE est parfois en pence (85,79 au lieu de 0,8579) ; et sur une conversion de quelques
+   centimes (0,02 $ pour 0,02 €), l'arrondi fausse le rapport des montants — la colonne FX fait alors foi. */
+const Fn_ColonneFx = x => !(x.fx > 0) ? null : (x.dev === 'GBP' && x.fx > 20 ? x.fx / 100 : x.fx);
 function Fn_Taux(mouvements, corrections) {
   const groupes = {}, taux = [];
   (mouvements || []).forEach(m => { if (Fn_Classer(m, corrections) === 'change') (groupes[m.date + ' ' + m.heure] = groupes[m.date + ' ' + m.heure] || []).push(m); });
   Object.values(groupes).forEach(g => {
     const e = g.filter(m => m.dev === 'EUR'), f = g.filter(m => m.dev !== 'EUR');
-    if (e.length === 1 && f.length === 1 && e[0].montant && f[0].montant && Math.sign(e[0].montant) !== Math.sign(f[0].montant))
-      taux.push({ dev: f[0].dev, date: f[0].date, heure: f[0].heure, r: Math.abs(e[0].montant / f[0].montant) });
-    else f.forEach(x => { if (x.fx > 0) taux.push({ dev: x.dev, date: x.date, heure: x.heure, r: 1 / x.fx }); });
+    if (e.length === 1 && f.length === 1 && e[0].montant && f[0].montant && Math.sign(e[0].montant) !== Math.sign(f[0].montant)) {
+      const col = Fn_ColonneFx(f[0]);
+      taux.push({ dev: f[0].dev, date: f[0].date, heure: f[0].heure, r: col && Math.abs(e[0].montant) < 5 ? 1 / col : Math.abs(e[0].montant / f[0].montant) });
+    } else f.forEach(x => { const col = Fn_ColonneFx(x); if (col) taux.push({ dev: x.dev, date: x.date, heure: x.heure, r: 1 / col }); });
   });
   return taux;
 }
