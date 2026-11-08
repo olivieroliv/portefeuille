@@ -8,3 +8,6 @@
 *.macro
 *.png
 !robots.txt
+
+# Outils d’essai : gardés sur le PC, jamais publiés.
+outillage/

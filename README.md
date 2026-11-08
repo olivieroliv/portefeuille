@@ -14,19 +14,11 @@ Ce dépôt est public : il ne contient **aucune** donnée de portefeuille, et n'
 ## Ajouter un indicateur
 
 Les indicateurs vivent dans `indicateurs.js`, une fiche par indicateur (calcul, seuils, explication) : le mode
-d'emploi est en tête du fichier. Ajouter une fiche suffit — ni la macro ni le reste de la page ne changent. Lancer
-ensuite `node outillage/tester.js` : chaque fiche y est exécutée sur un portefeuille fictif, avec et sans relevé ni cours.
+d'emploi est en tête du fichier. Ajouter une fiche suffit — ni la macro ni le reste de la page ne changent.
 
 ## Cours et analyse
 
-- **Cours** : lus dans le dépôt privé `portefeuille-cours` (robot quotidien), avec une clé d'accès GitHub
-  limitée à ce dépôt, enregistrée dans le navigateur seulement.
+- **Cours** : lus dans le dépôt privé `portefeuille-cours`, où le téléphone les dépose chaque soir, avec une clé
+  d'accès GitHub limitée à ce dépôt, enregistrée dans le navigateur seulement.
 - **Analyse par Claude** : SDK officiel `@anthropic-ai/sdk` chargé à la demande, avec la clé API de Vigie
   (même origine `olivieroliv.github.io`, donc même stockage). Coût estimé affiché avant chaque envoi.
-
-## Contrôles
-
-```
-node outillage/tester.js                 # jeux d'essai fictifs
-node outillage/tester.js capture.txt …   # + lecture de captures ou de relevés réels (montants masqués)
-```
