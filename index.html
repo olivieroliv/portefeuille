@@ -1268,6 +1268,7 @@ function Fn_RendreCours() {
   else if (idx) etat = 'Cours du ' + Fmt_DateHeure(Date.parse(idx.maj)) + ' (robot) · ' + (idx.series || []).length + ' séries'
     + ((idx.introuvables || []).length ? ' · ' + idx.introuvables.length + ' titre(s) introuvable(s), voir les réglages' : '');
   else etat = 'Aucun cours pour l’instant.';
+  if (idx && idx.alerte) etat += ' — ' + idx.alerte;
   if (Var_Cours.erreur) etat += ' — ' + Var_Cours.erreur;
   $('cours-etat').textContent = etat;
   const { detenus, passes } = Fn_TitresCours();
