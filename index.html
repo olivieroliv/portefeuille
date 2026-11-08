@@ -850,7 +850,8 @@ function Fn_BilanReception(r) {
 function Fn_HtmlVersement(v) {
   return 'Entre le ' + Fmt_Jour(v.du) + ' et le ' + Fmt_Jour(v.au) + ', environ <b>' + Fmt_Signe(v.montant) + '</b> ' + (v.montant > 0 ? 'sont arrivés' : 'sont partis')
     + ' sans achat ni vente : sans doute un ' + (v.montant > 0 ? 'versement (ou un gros dividende)' : 'retrait')
-    + '. Importez un relevé récent (CSV) : sinon le XIRR et le gain total n’en tiennent pas compte.';
+    + '. Pour le compter dans le XIRR et le gain total : appli DEGIRO → Courriel → <b>Compte</b> → ⬇ → <b>CSV</b>, puis ici « Importer un relevé (CSV) »'
+    + ' (fichier « Account » le plus récent des Téléchargements).';
 }
 async function Fn_ReceptionAuto() {
   if (!/[?&]capture=/.test(location.search)) return;
