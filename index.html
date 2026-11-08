@@ -1223,6 +1223,8 @@ function Fn_ListeSymboles() {
 }
 // Envoie la liste au dépôt si elle a changé : le robot se relance alors de lui-même.
 async function Fn_SyncSymboles() {
+  // Sans capture, on ne sait pas quels titres sont détenus : rien n'est envoyé (tous passeraient pour vendus).
+  if (!Fn_Derniere()) return false;
   const voulu = Fn_ListeSymboles();
   if (!voulu.titres.length) return false;
   const r = await Fn_Gh('contents/symboles.json');
