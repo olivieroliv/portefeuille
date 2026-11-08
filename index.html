@@ -1111,10 +1111,12 @@ function Fn_RendreReleve() {
 function Fn_Rendre() {
   const c = Fn_Derniere();
   // Les sections s'affichent AVANT d'être dessinées : un graphique dessiné caché n'a pas de largeur.
-  ['c-indicateurs', 'c-evolution', 'c-repartition', 'c-plusvalues', 'c-positions', 'c-cours', 'c-analyse'].forEach(id => $(id).classList.toggle('cache', !c));
+  ['c-indicateurs', 'c-evolution', 'c-repartition', 'c-plusvalues', 'c-positions', 'c-analyse'].forEach(id => $(id).classList.toggle('cache', !c));
   const k = Fn_Calculs();
   Fn_RendreSynthese(k);
-  if (c) { Fn_RendreIndicateurs(k); Fn_GrapheEvolution(k); Fn_GrapheRepartition(c); Fn_GraphePlusValues(c); Fn_RendreTableau(c); Fn_RendreCours(); Fn_RendreAnalyse(); }
+  if (c) { Fn_RendreIndicateurs(k); Fn_GrapheEvolution(k); Fn_GrapheRepartition(c); Fn_GraphePlusValues(c); Fn_RendreTableau(c); }
+  Fn_RendreCours();
+  if (c) Fn_RendreAnalyse();
   Fn_RendreReleve();
   const n = Var_Etat.captures.length;
   $('captures-etat').textContent = n ? n + ' capture(s) enregistrée(s), du ' + Fmt_Date(Var_Etat.captures[0].ts) + ' au ' + Fmt_Date(Var_Etat.captures[n - 1].ts) + '.' : 'Aucune capture enregistrée.';
@@ -1335,7 +1337,11 @@ function Fn_TitresCours() {
   return { detenus, passes };
 }
 function Fn_RendreCours() {
-  const c = Fn_Derniere(); if (!c) return;
+  const c = Fn_Derniere();
+  // Sans capture : seulement les réglages (la clé d'accès se colle avant la première capture, qui écrase le presse-papier).
+  ['s-titre', 'b-periodes', 'b-resolution', 'g-cours', 'cours-stats'].forEach(id => { const e = $(id); (e.closest('.reglage') || e).classList.toggle('cache', !c); });
+  if (!c) { $('cours-etat').textContent = Lire_Local(Cst_CleJeton) ? 'Clé d’accès enregistrée. Les graphiques des cours s’afficheront après la première capture.'
+    : 'Collez ici la clé d’accès GitHub (réglages ci-dessous) ; les graphiques des cours s’afficheront après la première capture.'; Fn_RendreReglagesCours(); return; }
   const jeton = !!Lire_Local(Cst_CleJeton), idx = Var_Cours.index;
   let etat;
   if (!jeton) etat = 'Pour afficher les cours, il faut une fois une clé d’accès GitHub (réglages en bas de cette carte).';
