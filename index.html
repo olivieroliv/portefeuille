@@ -891,7 +891,7 @@ function Fn_RendreSynthese(k) {
     + tuile('Gain total', k.gain == null ? '—' : Fmt_Signe(k.gain), k.releve ? 'valeur nette − versements nets' : sansReleve, Cls_Signe(k.gain))
     + (k.releve ? tuile('Dividendes nets', (k.divApprox ? '≈ ' : '') + Fmt_Signe(k.dividendes), 'après impôts et régularisations'
         + (k.divApprox ? ' · devises converties au taux du relevé' : ''), Cls_Signe(k.dividendes))
-      + tuile('Frais payés', (k.fraisApprox ? '≈ ' : '') + Fmt_Eur(-k.frais || 0),'courtage, connexion, change' + (k.fraisApprox ? ' · devises converties au taux du relevé' : '')) : '')
+      + tuile('Frais payés', (k.fraisApprox ? '≈ ' : '') + Fmt_Eur(-k.frais || 0),'courtage, connexion, change, taxes' + (k.fraisApprox ? ' · devises converties au taux du relevé' : '')) : '')
     + '</div></div>';
 }
 
