@@ -850,14 +850,22 @@ function Fn_BilanReception(r) {
 function Fn_HtmlVersement(v) {
   return 'Entre le ' + Fmt_Jour(v.du) + ' et le ' + Fmt_Jour(v.au) + ', environ <b>' + Fmt_Signe(v.montant) + '</b> ' + (v.montant > 0 ? 'sont arrivés' : 'sont partis')
     + ' sans achat ni vente : sans doute un ' + (v.montant > 0 ? 'versement (ou un gros dividende)' : 'retrait')
-    + '. Pour le compter dans le XIRR et le gain total : appli DEGIRO → Courriel → <b>Compte</b> → ⬇ → <b>CSV</b>, puis ici « Importer un relevé (CSV) »'
-    + ' (fichier « Account » le plus récent des Téléchargements).';
+    + '. Pour le compter dans le XIRR et le gain total : appli DEGIRO → Courriel → <b>Compte</b> → ⬇ → <b>CSV</b>.'
+    + ' La macro « Smart - relevé » l’importe ici toute seule et supprime le fichier.';
 }
 async function Fn_ReceptionAuto() {
-  if (!/[?&]capture=/.test(location.search)) return;
+  // ?capture=… : capture de la macro « DEGIRO -> Portefeuille » ; ?releve=… : relevé CSV exporté de l'appli DEGIRO,
+  // déposé par la macro « Smart - relevé ». Les deux arrivent par le presse-papier.
+  const releve = /[?&]releve=/.test(location.search);
+  if (!/[?&]capture=/.test(location.search) && !releve) return;
   try { history.replaceState(null, '', location.pathname); } catch (e) { /* adresse laissée telle quelle */ }
   const recevoir = async () => {
     const t = await navigator.clipboard.readText();
+    if (releve) {
+      const b = Fn_ImporterReleve(t, 'relevé de l’appli DEGIRO');
+      Fn_Sauver(); Fn_NoteReception(b.ok ? 'ok' : 'warn', 'Relevé reçu — ' + b.texte); Fn_Rendre();
+      return;
+    }
     const cap = Fn_LireCapture(t);
     if (!cap.erreur && cap.ts && (Date.now() - cap.ts) / 60000 > Cst_AgeMaxCaptureMin) {
       Fn_NoteReception('warn', 'La capture du presse-papier date du ' + Fn_Esc(Fmt_DateHeure(cap.ts)) + ' : ce n’est pas celle qui vient d’être faite.'
@@ -871,7 +879,7 @@ async function Fn_ReceptionAuto() {
   try { await recevoir(); }
   catch (e) {
     Fn_NoteReception('warn', 'Le navigateur demande un appui pour lire le presse-papier.'
-      + '<div class="rang"><button class="accent" id="b-recevoir">Recevoir la capture</button></div>');
+      + '<div class="rang"><button class="accent" id="b-recevoir">' + (releve ? 'Recevoir le relevé' : 'Recevoir la capture') + '</button></div>');
     $('b-recevoir').onclick = () => recevoir().catch(() => Fn_NoteReception('crit', 'Lecture du presse-papier refusée : utilisez « Coller une capture » en bas de page.'));
   }
 }
@@ -1173,18 +1181,21 @@ $('f-captures').onchange = async e => {
   Fn_NoteReception(ko ? 'warn' : 'ok', ok + ' capture(s) importée(s)' + (ko ? ', ' + ko + ' fichier(s) ignoré(s) (pas une capture, ou capture incomplète)' : '') + '.');
   e.target.value = ''; Fn_Rendre(); window.scrollTo(0, 0);
 };
+// Un relevé (CSV DEGIRO) ajouté à ceux déjà connus : un mouvement déjà connu n'est pas recompté.
+function Fn_ImporterReleve(texte, nom) {
+  const r = Fn_LireReleve(texte);
+  if (r.erreur) return { ok: false, texte: '<b>' + Fn_Esc(nom) + '</b> : ' + Fn_Esc(r.erreur) };
+  const fu = Fn_Fusionner(Fn_Mouvements(), r.mouvements);
+  Var_Etat.releve = { mouvements: fu.tous, imports: ((Var_Etat.releve && Var_Etat.releve.imports) || []).concat([{ fichier: nom, ts: Date.now(), lus: r.mouvements.length, ajoutes: fu.ajoutes }]) };
+  return { ok: true, texte: '<b>' + Fn_Esc(nom) + '</b> : ' + r.mouvements.length + ' mouvement(s) lu(s), ' + fu.ajoutes + ' nouveau(x)'
+    + (r.informatives ? ', ' + r.informatives + ' ligne(s) d’information sans montant (virements internes flatex…)' : '')
+    + (r.rejets ? ', ' + r.rejets + ' ligne(s) illisible(s) ignorée(s)' : '') };
+}
 $('f-releve').onchange = async e => {
   const bilans = [];
-  for (const f of e.target.files) {
-    const r = Fn_LireReleve(await lireFichier(f));
-    if (r.erreur) { bilans.push('<b>' + Fn_Esc(f.name) + '</b> : ' + Fn_Esc(r.erreur)); continue; }
-    const fu = Fn_Fusionner(Fn_Mouvements(), r.mouvements);
-    Var_Etat.releve = { mouvements: fu.tous, imports: ((Var_Etat.releve && Var_Etat.releve.imports) || []).concat([{ fichier: f.name, ts: Date.now(), lus: r.mouvements.length, ajoutes: fu.ajoutes }]) };
-    bilans.push('<b>' + Fn_Esc(f.name) + '</b> : ' + r.mouvements.length + ' mouvement(s) lu(s), ' + fu.ajoutes + ' nouveau(x)' + (r.informatives ? ', ' + r.informatives + ' ligne(s) d’information sans montant (virements internes flatex…)' : '')
-      + (r.rejets ? ', ' + r.rejets + ' ligne(s) illisible(s) ignorée(s)' : ''));
-  }
+  for (const f of e.target.files) bilans.push(Fn_ImporterReleve(await lireFichier(f), f.name));
   Fn_Sauver();
-  Fn_NoteReception(bilans.some(x => /colonnes|vide|illisible|Aucun/.test(x)) ? 'warn' : 'ok', 'Relevé — ' + bilans.join('<br>'));
+  Fn_NoteReception(bilans.every(b => b.ok) ? 'ok' : 'warn', 'Relevé — ' + bilans.map(b => b.texte).join('<br>'));
   e.target.value = ''; Fn_Rendre(); window.scrollTo(0, 0);
 };
 $('b-sauver').onclick = () => {
