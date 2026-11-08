@@ -79,6 +79,28 @@ th { color: var(--encre-2); font-weight: 600; font-size: 12px; }
 .defile { overflow-x: auto; }
 details summary { cursor: pointer; color: var(--encre-2); font-size: 13.5px; margin-top: 8px; }
 .cache { display: none !important; }
+.choix { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
+.choix button { padding: 4px 9px; font-size: 13px; }
+.choix button[aria-pressed="true"] { background: var(--serie-1); color: #fff; border-color: transparent; }
+.choix button:disabled { opacity: 0.4; cursor: default; }
+.ind { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: 8px 0; border-bottom: 1px solid var(--grille); }
+.ind .nom { font-weight: 600; font-size: 14px; }
+.ind .val { font-weight: 600; text-align: right; white-space: nowrap; }
+.ind .det { grid-column: 1 / -1; color: var(--muet); font-size: 12.5px; }
+.etat { font-size: 12px; font-weight: 600; white-space: nowrap; }
+.etat-bon { color: var(--texte-gain); } .etat-moyen { color: #9a6700; } .etat-alerte { color: var(--critique); } .etat-attente { color: var(--muet); }
+:root[data-theme="dark"] .etat-moyen { color: #fab219; }
+@media (prefers-color-scheme: dark) { :root:where(:not([data-theme="light"])) .etat-moyen { color: #fab219; } }
+.famille { color: var(--encre-2); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; margin: 12px 0 0; }
+input[type="number"], input[type="text"], input[type="password"] { font: inherit; font-size: 13px; background: var(--surface); color: var(--encre);
+  border: 1px solid var(--bord); border-radius: 6px; padding: 4px 6px; }
+input[type="number"] { width: 70px; }
+.reglage { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0; font-size: 13px; }
+.rapport h3 { font-size: 14.5px; margin: 12px 0 4px; }
+.rapport p { margin: 4px 0; }
+.rapport .item { padding: 6px 0; border-bottom: 1px solid var(--grille); }
+.badge { display: inline-block; font-size: 11.5px; font-weight: 600; padding: 1px 6px; border-radius: 6px; background: var(--surface-2); color: var(--encre-2); margin-right: 6px; }
+select { max-width: 100%; }
 </style>
 </head>
 <body>
@@ -89,6 +111,13 @@ details summary { cursor: pointer; color: var(--encre-2); font-size: 13.5px; mar
   <div id="reception"></div>
 
   <section id="v-synthese"></section>
+
+  <section class="carte" id="c-indicateurs">
+    <h2>Indicateurs</h2>
+    <div class="muet">Chaque indicateur compare sa valeur à deux seuils réglables : ✓ bon · ! à surveiller · ✕ alerte. « En attente » : il manque une donnée (relevé de compte ou cours). Touchez un indicateur pour son explication.</div>
+    <div id="t-indicateurs"></div>
+    <details><summary>Régler les indicateurs</summary><div id="r-indicateurs"></div></details>
+  </section>
 
   <section class="carte" id="c-evolution">
     <h2>Évolution de la valeur</h2>
@@ -112,7 +141,33 @@ details summary { cursor: pointer; color: var(--encre-2); font-size: 13.5px; mar
 
   <section class="carte" id="c-positions">
     <h2>Positions</h2>
+    <div class="muet">Touchez une ligne pour voir son cours.</div>
     <div class="defile" id="t-positions"></div>
+  </section>
+
+  <section class="carte" id="c-cours">
+    <h2>Cours par action</h2>
+    <div class="muet" id="cours-etat"></div>
+    <div class="reglage"><select id="s-titre" aria-label="Titre"></select></div>
+    <div class="choix" id="b-periodes" role="group" aria-label="Période"></div>
+    <div class="choix" id="b-resolution" role="group" aria-label="Résolution"></div>
+    <div class="graphe" id="g-cours"></div>
+    <div id="cours-stats"></div>
+    <details><summary>Réglages des cours (accès GitHub, symboles)</summary><div id="r-cours"></div></details>
+  </section>
+
+  <section class="carte" id="c-analyse">
+    <h2>Analyse par Claude</h2>
+    <div class="muet">Avertissements et propositions rédigés par Claude à partir de vos chiffres — et, au choix, de l’actualité trouvée sur le web.
+      Rien n’est envoyé sans votre appui ; le coût estimé s’affiche avant. Ce n’est pas un conseil en investissement.</div>
+    <div id="analyse-cle"></div>
+    <div class="rang">
+      <button id="b-analyse-rapide">Analyse rapide</button>
+      <button id="b-analyse-web">Analyse avec l’actualité (web)</button>
+    </div>
+    <div id="analyse-confirmer"></div>
+    <div id="analyse-resultat" class="rapport"></div>
+    <details><summary>Réglages de l’analyse</summary><div id="r-analyse"></div></details>
   </section>
 
   <section class="carte" id="c-releve">
@@ -490,6 +545,135 @@ function Fn_FluxXirr(flux, valeur, tsValeur) {
 }
 </script>
 
+<script id="calculs">
+'use strict';
+/* =====================================================================
+   CALCULS SUR LES COURS ET LE RELEVÉ — fonctions pures, sans navigateur,
+   exécutées aussi par outillage/tester.js. Une série de cours :
+   { jours: ['AAAA-MM-JJ', …], clotures: [nombre, …], devise }.
+   ===================================================================== */
+// Rang de la dernière date ≤ jour (recherche dichotomique) ; -1 si la série commence après.
+function Fn_RangAu(jours, jour) {
+  let a = 0, b = jours.length - 1, r = -1;
+  while (a <= b) { const m = (a + b) >> 1; if (jours[m] <= jour) { r = m; a = m + 1; } else b = m - 1; }
+  return r;
+}
+// Dernière clôture connue à une date (un jour férié reprend la veille).
+function Fn_ValeurAu(serie, jour) { if (!serie) return null; const i = Fn_RangAu(serie.jours, jour); return i < 0 ? null : serie.clotures[i]; }
+/* Unités de devise pour 1 € à une date (taux BCE). Le penny (GBX) vaut un centième de livre :
+   1 € = 100 × (livres pour 1 €) pence. */
+function Fn_TauxAu(fx, dev, jour) {
+  if (!dev || dev === 'EUR') return 1;
+  const s = fx[dev === 'GBX' ? 'GBP' : dev];
+  if (!s) return null;
+  const i = Fn_RangAu(s.jours, jour); if (i < 0) return null;
+  return dev === 'GBX' ? s.valeurs[i] * 100 : s.valeurs[i];
+}
+/* Valeur en euros, chaque jour depuis « depuis », du portefeuille ACTUEL (quantités d'aujourd'hui) :
+   c'est une rétropolation, pas l'historique réel du compte. Exige 80 % de la valeur couverte par des cours. */
+function Fn_ValeurPortefeuilleActuel(positions, serie, fx, depuis) {
+  const lignes = positions.map(p => ({ p, s: serie(p.isin) })).filter(x => x.s && x.s.jours.length && x.p.qte);
+  const tot = positions.reduce((s, p) => s + (p.valeur || 0), 0), couvert = lignes.reduce((s, x) => s + x.p.valeur, 0);
+  if (!tot || couvert / tot < 0.8) return null;
+  const jours = [...new Set([].concat(...lignes.map(x => x.s.jours.filter(j => j >= depuis))))].sort();
+  const out = { jours: [], valeurs: [], couverture: couvert / tot };
+  jours.forEach(j => {
+    let v = 0;
+    for (const x of lignes) {
+      const c = Fn_ValeurAu(x.s, j), t = Fn_TauxAu(fx, x.p.dev, j);
+      if (c == null || t == null) return;
+      v += x.p.qte * c / t;
+    }
+    out.jours.push(j); out.valeurs.push(v);
+  });
+  return out.valeurs.length ? out : null;
+}
+function Fn_Rendements(v) { const r = []; for (let i = 1; i < v.length; i++) if (v[i - 1] > 0) r.push(v[i] / v[i - 1] - 1); return r; }
+function Fn_Moyenne(a) { return a.length ? a.reduce((s, x) => s + x, 0) / a.length : null; }
+// Écart-type annualisé (252 séances).
+function Fn_Volatilite(r) {
+  if (r.length < 2) return null;
+  const m = Fn_Moyenne(r);
+  return Math.sqrt(r.reduce((s, x) => s + (x - m) * (x - m), 0) / (r.length - 1)) * Math.sqrt(252);
+}
+// Plus forte baisse d'un sommet au creux suivant : { perte (négative), debut, fin } (rangs dans la série).
+function Fn_PerteMax(v) {
+  let pic = 0, pire = { perte: 0, debut: 0, fin: 0 };
+  for (let i = 1; i < v.length; i++) {
+    if (v[i] > v[pic]) pic = i;
+    const p = v[i] / v[pic] - 1;
+    if (p < pire.perte) pire = { perte: p, debut: pic, fin: i };
+  }
+  return pire;
+}
+// Variation en % d'une série entre « depuis » (dernière clôture connue à cette date) et sa dernière clôture.
+function Fn_PerformanceSerie(serie, depuis) {
+  if (!serie || !serie.clotures.length) return null;
+  const a = Fn_ValeurAu(serie, depuis), b = serie.clotures[serie.clotures.length - 1];
+  return a > 0 ? (b / a - 1) * 100 : null;
+}
+/* Achats et ventes d'un titre lus dans le relevé : « Achat 90 Orbis Luxe@48,25 EUR (ISIN) ». Quantité et prix
+   viennent du libellé ; le montant en euros, du mouvement lui-même quand il est en euros. */
+function Fn_Operations(mouvements, isin) {
+  const out = [];
+  (mouvements || []).forEach(m => {
+    if (m.isin !== isin) return;
+    // Quantité : groupes de milliers de trois chiffres (« 1 307 ») ; prix : le nombre entier après « @ », jusqu'à sa devise.
+    const r = /^(Achat|Vente|Buy|Sell)\s+(\d{1,3}(?:[\s .]\d{3})*|\d+)\s+.*?@\s*(\d[\d\s .,]*\d|\d)\s*(€|\$|£|[A-Z]{3})?(?=\s|\(|$)/i.exec(m.desc || '');
+    if (!r) return;
+    const qte = Fn_Nombre(r[2]), prix = Fn_Nombre(r[3]);
+    if (qte == null || prix == null) return;
+    out.push({ date: m.date, type: /^(achat|buy)/i.test(r[1]) ? 'achat' : 'vente', qte, prix, dev: r[4] || m.dev, montant: m.montant, devMontant: m.dev });
+  });
+  return out.sort((a, b) => a.date < b.date ? -1 : 1);
+}
+/* NOMS SUCCESSIFS d'un titre : chaque mouvement du relevé porte le nom du produit À SA DATE. Deux écritures du
+   même nom (« ALSTOM » et « Alstom SA ») ne font pas un renommage ; un autre nom, si. */
+function Fn_NomCourt(n) {
+  return String(n || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/\b(sa|se|nv|n\.v\.|ag|plc|inc|corp|corporation|ltd|limited|class [a-z]|cl [a-z]|s\.p\.a\.|spa|asa|oyj|ab)\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ').trim();
+}
+function Fn_NomsSuccessifs(mouvements, isin, nomActuel) {
+  const vus = {};
+  (mouvements || []).forEach(m => {
+    if (m.isin !== isin || !m.produit) return;
+    const k = Fn_NomCourt(m.produit);
+    const x = vus[k] = vus[k] || { nom: m.produit, du: m.date, au: m.date };
+    if (m.date < x.du) x.du = m.date; if (m.date > x.au) x.au = m.date;
+  });
+  const actuel = Fn_NomCourt(nomActuel);
+  return Object.keys(vus).filter(k => k && actuel && !(actuel.includes(k) || k.includes(actuel))).map(k => vus[k]).sort((a, b) => a.du < b.du ? -1 : 1);
+}
+/* OUTILS COMMUNS DES INDICATEURS (ctx.outils, voir indicateurs.js). fx : { USD: série BCE, GBP: …, … }. */
+function Fn_OutilsIndicateurs(ctx, fx) {
+  const valeur = depuis => Fn_ValeurPortefeuilleActuel(ctx.positions, ctx.cours.serie, fx, depuis);
+  return {
+    poids: () => { const tot = ctx.positions.reduce((s, p) => s + p.valeur, 0);
+      return tot ? ctx.positions.map(p => ({ nom: p.nom, isin: p.isin, poids: p.valeur / tot * 100 })).sort((a, b) => b.poids - a.poids) : []; },
+    valeurPortefeuilleActuel: valeur,
+    performancePortefeuille: depuis => { const v = valeur(depuis); return v && v.valeurs.length > 1 ? (v.valeurs[v.valeurs.length - 1] / v.valeurs[0] - 1) * 100 : null; },
+    rendements: Fn_Rendements, volatilite: Fn_Volatilite, perteMax: Fn_PerteMax, moyenne: Fn_Moyenne,
+    performanceSerie: Fn_PerformanceSerie,
+    jourIlYa: n => Fn_Jour((ctx.maintenant || Date.now()) - n * 86400000)
+  };
+}
+/* ÉTAT D'UN INDICATEUR face à ses deux seuils (réglages de l'utilisateur, sinon ceux de la fiche) :
+   bon · moyen (à surveiller) · alerte · attente (donnée manquante). Une fiche qui plante ne casse pas la page. */
+function Fn_EvaluerIndicateur(ind, ctx, reglage) {
+  const vert = reglage && reglage.vert != null && reglage.vert !== '' ? Number(reglage.vert) : ind.vert;
+  const rouge = reglage && reglage.rouge != null && reglage.rouge !== '' ? Number(reglage.rouge) : ind.rouge;
+  let r;
+  try { r = ind.calcul(ctx) || { manquant: 'calcul impossible' }; } catch (e) { r = { manquant: 'erreur de calcul (' + e.message + ')' }; }
+  if (r.manquant || r.valeur == null || !isFinite(r.valeur)) return { statut: 'attente', manquant: r.manquant || 'donnée manquante', vert, rouge };
+  const v = r.valeur;
+  const statut = ind.sens === 'haut' ? (v >= vert ? 'bon' : v < rouge ? 'alerte' : 'moyen') : (v <= vert ? 'bon' : v > rouge ? 'alerte' : 'moyen');
+  return { statut, valeur: v, detail: r.detail || '', vert, rouge };
+}
+</script>
+
+<script src="indicateurs.js"></script>
+
 <script>
 'use strict';
 /* =====================================================================
@@ -497,7 +681,7 @@ function Fn_FluxXirr(flux, valeur, tsValeur) {
    ===================================================================== */
 const Cst_Cle = 'portefeuille-v1';
 const Cst_CapturesCompletes = 40;   // au-delà, une capture ne garde que ses totaux (la courbe n'utilise qu'eux)
-const Etat_Vide = () => ({ captures: [], releve: null, corrections: {}, theme: 'auto' });
+const Etat_Vide = () => ({ captures: [], releve: null, corrections: {}, theme: 'auto', reglages: {}, indicateurs: {}, corrSymboles: {}, analyses: [] });
 let Var_Etat = Etat_Vide();
 try { const s = localStorage.getItem(Cst_Cle); if (s) Var_Etat = Object.assign(Etat_Vide(), JSON.parse(s)); } catch (e) { /* stockage indisponible */ }
 
@@ -642,7 +826,7 @@ function Fn_RendreSynthese(k) {
     + tuile('Gain total', k.gain == null ? '—' : Fmt_Signe(k.gain), k.releve ? 'valeur nette − versements nets' : sansReleve, Cls_Signe(k.gain))
     + (k.releve ? tuile('Dividendes nets', (k.divApprox ? '≈ ' : '') + Fmt_Signe(k.dividendes), 'après impôts et régularisations'
         + (k.divApprox ? ' · devises converties au taux du relevé' : ''), Cls_Signe(k.dividendes))
-      + tuile('Frais payés', (k.fraisApprox ? '≈ ' : '') + Fmt_Eur(-k.frais), 'courtage, connexion, change' + (k.fraisApprox ? ' · devises converties au taux du relevé' : '')) : '')
+      + tuile('Frais payés', (k.fraisApprox ? '≈ ' : '') + Fmt_Eur(-k.frais || 0),'courtage, connexion, change' + (k.fraisApprox ? ' · devises converties au taux du relevé' : '')) : '')
     + '</div></div>';
 }
 
@@ -800,11 +984,19 @@ function Fn_RendreTableau(c) {
   const alertes = Fn_Alertes(c);
   // Quatre colonnes pour tenir sur un téléphone ; quantité, cours et PRU passent sous le nom.
   $('t-positions').innerHTML = '<table><thead><tr><th>Titre</th><th>Valeur</th><th>Poids</th><th>+/− latente</th></tr></thead><tbody>'
-    + rows.map(p => '<tr><td>' + Fn_Esc(p.nom) + '<div class="muet">' + Fn_Esc(p.ticker) + ' · ' + Fmt_Nb(p.qte, 0) + ' × ' + Fmt_Nb(p.cours, 3) + ' ' + Fn_Esc(p.dev)
+    + rows.map(p => '<tr data-isin="' + Fn_Esc(p.isin) + '" style="cursor:pointer"><td>' + Fn_Esc(p.nom) + Fn_HtmlAnciensNoms(p) + '<div class="muet">' + Fn_Esc(p.ticker) + ' · ' + Fmt_Nb(p.qte, 0) + ' × ' + Fmt_Nb(p.cours, 3) + ' ' + Fn_Esc(p.dev)
       + ' · PRU ' + Fmt_Nb(p.pru, 3) + '</div></td><td>' + Fmt_Eur(p.valeur) + '</td><td>' + Fmt_Pct(p.valeur / total * 100, 1)
       + '</td><td class="' + Cls_Signe(p.plLat) + '">' + Fmt_Signe(p.plLat) + '<div class="muet">' + Fmt_Pct(p.plPct, 1, true) + '</div></td></tr>').join('')
     + '</tbody></table>'
     + (alertes.length ? '<div class="note note-warn">À vérifier sur cette capture : ' + Fn_Esc(alertes.join(' ; ')) + '.</div>' : '');
+  document.querySelectorAll('#t-positions tr[data-isin]').forEach(tr => tr.onclick = () => {
+    Var_Vue.isin = tr.dataset.isin; Fn_RendreCours(); $('c-cours').scrollIntoView({ behavior: 'smooth' });
+  });
+}
+// « (anciennement X) » quand le relevé montre ce titre (même ISIN) sous un autre nom.
+function Fn_HtmlAnciensNoms(p) {
+  const n = Fn_NomsSuccessifs(Fn_Mouvements(), p.isin, p.nom);
+  return n.length ? ' <span class="muet">(anciennement ' + n.map(x => Fn_Esc(x.nom)).join(', ') + ')</span>' : '';
 }
 
 /* ---------- relevé ---------- */
@@ -846,10 +1038,10 @@ function Fn_RendreReleve() {
 function Fn_Rendre() {
   const c = Fn_Derniere();
   // Les sections s'affichent AVANT d'être dessinées : un graphique dessiné caché n'a pas de largeur.
-  ['c-evolution', 'c-repartition', 'c-plusvalues', 'c-positions'].forEach(id => $(id).classList.toggle('cache', !c));
+  ['c-indicateurs', 'c-evolution', 'c-repartition', 'c-plusvalues', 'c-positions', 'c-cours', 'c-analyse'].forEach(id => $(id).classList.toggle('cache', !c));
   const k = Fn_Calculs();
   Fn_RendreSynthese(k);
-  if (c) { Fn_GrapheEvolution(k); Fn_GrapheRepartition(c); Fn_GraphePlusValues(c); Fn_RendreTableau(c); }
+  if (c) { Fn_RendreIndicateurs(k); Fn_GrapheEvolution(k); Fn_GrapheRepartition(c); Fn_GraphePlusValues(c); Fn_RendreTableau(c); Fn_RendreCours(); Fn_RendreAnalyse(); }
   Fn_RendreReleve();
   const n = Var_Etat.captures.length;
   $('captures-etat').textContent = n ? n + ' capture(s) enregistrée(s), du ' + Fmt_Date(Var_Etat.captures[0].ts) + ' au ' + Fmt_Date(Var_Etat.captures[n - 1].ts) + '.' : 'Aucune capture enregistrée.';
@@ -902,7 +1094,467 @@ $('b-theme').onclick = () => { Var_Etat.theme = { auto: 'light', light: 'dark', 
 let attente, largeur = window.innerWidth;
 window.addEventListener('resize', () => { if (window.innerWidth === largeur) return; largeur = window.innerWidth; clearTimeout(attente); attente = setTimeout(Fn_Rendre, 150); });
 
-Fn_Theme(); Fn_Rendre(); Fn_ReceptionAuto();
+/* =====================================================================
+   COURS — lus dans le dépôt PRIVÉ du robot (branche « donnees »), avec une clé
+   d'accès GitHub limitée à ce dépôt. Gardés sur l'appareil (IndexedDB).
+   ===================================================================== */
+const Cst_CleJeton = 'portefeuille-github-jeton';   // jamais dans l'état ni dans les sauvegardes
+const Cst_CleApi = 'vigie-portefeuille-apikey';     // LA MÊME CLÉ QUE VIGIE : même origine (olivieroliv.github.io), même stockage
+const Lire_Local = k => { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } };
+const Ecrire_Local = (k, v) => { try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); return true; } catch (e) { return false; } };
+const Fn_Reglages = () => Object.assign({ depot: 'olivieroliv/portefeuille-cours', modele: 'claude-opus-5-5', effort: 'medium' }, Var_Etat.reglages || {});
+let Var_Cours = { sha: null, index: null, series: {}, minute: {}, maj: null, erreur: null, enCours: false };
+let Var_Vue = { isin: null, periode: '1A', resolution: 'jour' };
+
+function Fn_Idb() { return new Promise((ok, ko) => { try { const r = indexedDB.open('portefeuille', 1); r.onupgradeneeded = () => r.result.createObjectStore('fichiers'); r.onsuccess = () => ok(r.result); r.onerror = () => ko(r.error); } catch (e) { ko(e); } }); }
+async function Fn_IdbLire(cle) { try { const db = await Fn_Idb(); return await new Promise((ok, ko) => { const r = db.transaction('fichiers').objectStore('fichiers').get(cle); r.onsuccess = () => ok(r.result); r.onerror = () => ko(r.error); }); } catch (e) { return null; } }
+async function Fn_IdbEcrire(cle, v) { try { const db = await Fn_Idb(); await new Promise((ok, ko) => { const t = db.transaction('fichiers', 'readwrite'); t.objectStore('fichiers').put(v, cle); t.oncomplete = ok; t.onerror = () => ko(t.error); }); return true; } catch (e) { return false; } }
+
+async function Fn_Gh(chemin, opt) {
+  const jeton = Lire_Local(Cst_CleJeton);
+  if (!jeton) throw new Error('accès GitHub non configuré');
+  const o = opt || {};
+  const r = await fetch('https://api.github.com/repos/' + Fn_Reglages().depot + '/' + chemin, Object.assign({}, o, {
+    headers: Object.assign({ Authorization: 'Bearer ' + jeton, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' }, o.headers || {}) }));
+  if (r.status === 401) throw new Error('clé d’accès GitHub refusée ou expirée');
+  if (r.status === 403) throw new Error('clé d’accès GitHub sans le droit nécessaire (Contents : lecture et écriture)');
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error('GitHub a répondu ' + r.status);
+  return r;
+}
+async function Fn_GhFichier(chemin, ref) {
+  const r = await Fn_Gh('contents/' + chemin.split('/').map(encodeURIComponent).join('/') + (ref ? '?ref=' + ref : ''), { headers: { Accept: 'application/vnd.github.raw+json' } });
+  return r ? r.json() : null;
+}
+const Fn_Base64 = s => { const o = new TextEncoder().encode(s); let b = ''; for (let i = 0; i < o.length; i += 0x8000) b += String.fromCharCode.apply(null, o.subarray(i, i + 0x8000)); return btoa(b); };
+const Fn_DeBase64 = b => new TextDecoder().decode(Uint8Array.from(atob(String(b).replace(/\s/g, '')), c => c.charCodeAt(0)));
+const Cst_DevSymbole = { '€': 'EUR', '$': 'USD', '£': 'GBP' };
+
+// Titres pour le robot : ceux détenus (dernière capture) et ceux d'avant (achats et ventes du relevé), avec la date du premier achat.
+function Fn_ListeSymboles() {
+  const c = Fn_Derniere(), titres = {};
+  Fn_Mouvements().forEach(m => {
+    if (!/^[A-Z]{2}[A-Z0-9]{9}\d$/.test(m.isin || '')) return;
+    const t = Fn_Classer(m, Var_Etat.corrections);
+    if (t !== 'achat' && t !== 'vente') return;
+    const op = Fn_Operations([m], m.isin)[0], dev = op ? (Cst_DevSymbole[op.dev] || op.dev) : m.dev;
+    const x = titres[m.isin] = titres[m.isin] || { isin: m.isin, ticker: '', dev, nom: m.produit || '', detenu: false, depuis: m.date };
+    if (m.date < x.depuis) x.depuis = m.date;
+  });
+  (c ? c.positions : []).forEach(p => { titres[p.isin] = Object.assign(titres[p.isin] || {}, { isin: p.isin, ticker: p.ticker, dev: p.dev, nom: p.nom, detenu: true }); });
+  return { titres: Object.values(titres).sort((a, b) => a.isin < b.isin ? -1 : 1), corrections: Var_Etat.corrSymboles || {} };
+}
+// Envoie la liste au dépôt si elle a changé : le robot se relance alors de lui-même.
+async function Fn_SyncSymboles() {
+  const voulu = Fn_ListeSymboles();
+  if (!voulu.titres.length) return false;
+  const r = await Fn_Gh('contents/symboles.json');
+  let actuel = null, sha;
+  if (r) { const j = await r.json(); sha = j.sha; try { actuel = JSON.parse(Fn_DeBase64(j.content)); } catch (e) { actuel = null; } }
+  const empreinte = o => JSON.stringify([(o.titres || []).map(t => [t.isin, t.ticker || '', t.dev || '', !!t.detenu, t.depuis || '']), o.corrections || {}]);
+  if (actuel && empreinte(actuel) === empreinte(voulu)) return false;
+  await Fn_Gh('contents/symboles.json', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: 'Titres mis à jour par l’application Portefeuille', sha,
+      content: Fn_Base64(JSON.stringify(Object.assign({ maj: new Date().toISOString() }, voulu), null, 1)) }) });
+  return true;
+}
+async function Fn_ChargerCours(forcer) {
+  if (!Var_Cours.sha) { const cache = await Fn_IdbLire('cours'); if (cache) Object.assign(Var_Cours, cache); }
+  if (!Lire_Local(Cst_CleJeton) || Var_Cours.enCours) { Fn_RendreCours(); return; }
+  Var_Cours.enCours = true; Var_Cours.erreur = null; Fn_RendreCours();
+  try {
+    try { if (await Fn_SyncSymboles()) Var_Cours.envoi = Date.now(); }
+    catch (e) { Var_Cours.erreur = 'liste des titres non envoyée : ' + e.message; }
+    const b = await Fn_Gh('branches/donnees');
+    if (!b) { Var_Cours.erreur = Var_Cours.erreur || 'le robot n’a pas encore publié de cours (il tourne quelques minutes après l’envoi de la liste)'; return; }
+    const sha = (await b.json()).commit.sha;
+    if (sha !== Var_Cours.sha || forcer) {
+      const index = await Fn_GhFichier('index.json', sha);
+      const series = {}, minute = {}, ent = index.series || [];
+      for (let i = 0; i < ent.length; i += 4) {
+        await Promise.all(ent.slice(i, i + 4).map(async e => {
+          series[e.id] = await Fn_GhFichier('cours/' + e.id + '.json', sha);
+          if (e.minute) minute[e.id] = await Fn_GhFichier('minute/' + e.id + '.json', sha);
+        }));
+      }
+      Object.assign(Var_Cours, { sha, index, series, minute, maj: Date.now() });
+      await Fn_IdbEcrire('cours', { sha, index, series, minute, maj: Var_Cours.maj });
+    }
+  } catch (e) { Var_Cours.erreur = e.message; }
+  finally { Var_Cours.enCours = false; Fn_Rendre(); }
+}
+const Fn_Serie = id => { const s = Var_Cours.series[id]; return s && s.jours && s.jours.length ? s : null; };
+const Fn_Fx = () => { const fx = {}; Object.keys(Var_Cours.series).forEach(id => { if (/^FX-/.test(id) && Var_Cours.series[id]) fx[id.slice(3)] = Var_Cours.series[id]; }); return fx; };
+
+/* ---------- indicateurs ---------- */
+function Fn_ContexteIndicateurs(k) {
+  const c = Fn_Derniere(); if (!c || !k) return null;
+  const mv = Fn_Mouvements(), taux = Fn_Taux(mv, Var_Etat.corrections), fx = Fn_Fx();
+  const ctx = { positions: c.positions, marge: c.marge, k,
+    releve: mv.length ? { mouvements: mv, classer: m => Fn_Classer(m, Var_Etat.corrections), enEuros: m => Fn_EnEuros(m, taux) } : null,
+    cours: { serie: Fn_Serie, fx: (dev, jour) => Fn_TauxAu(fx, dev, jour) } };
+  ctx.outils = Fn_OutilsIndicateurs(ctx, fx);
+  return ctx;
+}
+const Cst_Etats = { bon: ['✓', 'bon'], moyen: ['!', 'à surveiller'], alerte: ['✕', 'alerte'], attente: ['…', 'en attente'] };
+function Fn_FmtIndicateur(ind, v) {
+  if (ind.unite === '%') return Fmt_Pct(v, 1, ind.sens === 'haut');
+  if (ind.unite === 'pts') return (v > 0 ? '+' : '') + Fmt_Nb(v, 1) + ' pts';
+  if (ind.unite === '€') return Fmt_Eur(v);
+  return Fmt_Nb(v, Number.isInteger(v) ? 0 : 1);
+}
+function Fn_EvaluerTous(k) {
+  const ctx = Fn_ContexteIndicateurs(k); if (!ctx) return [];
+  const regl = Var_Etat.indicateurs || {};
+  return Cst_Indicateurs.filter(ind => !(regl[ind.id] && regl[ind.id].actif === false)).map(ind => Object.assign({ ind }, Fn_EvaluerIndicateur(ind, ctx, regl[ind.id])));
+}
+function Fn_RendreIndicateurs(k) {
+  const res = Fn_EvaluerTous(k);
+  let h = '', famille = null;
+  res.forEach(r => {
+    if (r.ind.famille !== famille) { famille = r.ind.famille; h += '<div class="famille">' + Fn_Esc(famille) + '</div>'; }
+    const e = Cst_Etats[r.statut];
+    h += '<div class="ind"><div class="nom">' + Fn_Esc(r.ind.nom) + '</div><div class="val">' + (r.statut === 'attente' ? '—' : Fn_Esc(Fn_FmtIndicateur(r.ind, r.valeur)))
+      + ' <span class="etat etat-' + r.statut + '">' + e[0] + ' ' + e[1] + '</span></div>'
+      + '<div class="det">' + Fn_Esc(r.statut === 'attente' ? 'Il manque : ' + r.manquant : r.detail) + '</div>'
+      + '<div class="det expl cache">' + Fn_Esc(r.ind.explication) + ' Seuils : bon ' + (r.ind.sens === 'haut' ? '≥ ' : '≤ ') + Fn_Esc(r.vert) + ', alerte ' + (r.ind.sens === 'haut' ? '< ' : '> ') + Fn_Esc(r.rouge) + '.</div></div>';
+  });
+  $('t-indicateurs').innerHTML = h;
+  // L'explication de chaque indicateur s'ouvre en le touchant : la liste reste courte sur un téléphone.
+  document.querySelectorAll('#t-indicateurs .ind').forEach(el => { el.style.cursor = 'pointer'; el.onclick = () => el.querySelector('.expl').classList.toggle('cache'); });
+  const regl = Var_Etat.indicateurs || {};
+  $('r-indicateurs').innerHTML = '<div class="muet">Seuils : « bon » jusqu’au premier, « alerte » au-delà du second (« sens » : ' + 'plus haut = mieux ↑, plus bas = mieux ↓).</div>'
+    + Cst_Indicateurs.map(ind => { const r = regl[ind.id] || {};
+      return '<div class="reglage"><label><input type="checkbox" data-ind="' + ind.id + '" data-champ="actif"' + (r.actif === false ? '' : ' checked') + '> ' + Fn_Esc(ind.nom) + ' ' + (ind.sens === 'haut' ? '↑' : '↓') + '</label>'
+        + ' bon <input type="number" step="any" data-ind="' + ind.id + '" data-champ="vert" value="' + Fn_Esc(r.vert != null ? r.vert : ind.vert) + '">'
+        + ' alerte <input type="number" step="any" data-ind="' + ind.id + '" data-champ="rouge" value="' + Fn_Esc(r.rouge != null ? r.rouge : ind.rouge) + '"></div>'; }).join('')
+    + '<div class="rang"><button id="b-ind-defaut">Seuils par défaut</button></div>';
+  document.querySelectorAll('#r-indicateurs [data-ind]').forEach(el => el.onchange = () => {
+    const r = (Var_Etat.indicateurs[el.dataset.ind] = Var_Etat.indicateurs[el.dataset.ind] || {});
+    r[el.dataset.champ] = el.type === 'checkbox' ? el.checked : (el.value === '' ? null : Number(el.value));
+    Fn_Sauver(); Fn_RendreIndicateurs(Fn_Calculs());
+  });
+  $('b-ind-defaut').onclick = () => { Var_Etat.indicateurs = {}; Fn_Sauver(); Fn_RendreIndicateurs(Fn_Calculs()); };
+}
+
+/* ---------- cours par action ---------- */
+const Cst_Periodes = [['1J', '1 jour', 2], ['5J', '5 jours', 7], ['1M', '1 mois', 31], ['3M', '3 mois', 92], ['6M', '6 mois', 183], ['1A', '1 an', 365], ['3A', '3 ans', 1096], ['5A', '5 ans', 1827], ['MAX', 'Tout', null]];
+const Fmt_Heure = (ts, decal) => { const d = new Date((ts + (decal || 0)) * 1000); return String(d.getUTCDate()).padStart(2, '0') + '/' + String(d.getUTCMonth() + 1).padStart(2, '0') + ' ' + String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0'); };
+// Points du graphique : { etiquette, v, jour } — à la minute (5 derniers jours) ou à la clôture quotidienne.
+function Fn_PointsCours(isin, periode, resolution) {
+  if ((periode === '1J' || periode === '5J') && resolution === 'minute') {
+    const m = Var_Cours.minute[isin]; if (!m || !m.t || !m.t.length) return null;
+    const jourDe = ts => new Date((ts + (m.decalage || 0)) * 1000).toISOString().slice(0, 10);
+    const dernier = jourDe(m.t[m.t.length - 1]);
+    const i0 = periode === '1J' ? m.t.findIndex(t => jourDe(t) === dernier) : 0;
+    return m.t.slice(i0).map((t, i) => ({ etiquette: Fmt_Heure(t, m.decalage), v: m.c[i0 + i], jour: jourDe(t) }));
+  }
+  const s = Fn_Serie(isin); if (!s) return null;
+  const p = Cst_Periodes.find(x => x[0] === periode), depuis = p && p[2] ? Fn_Jour(Date.now() - p[2] * 86400000) : '0000-00-00';
+  const i0 = Math.max(0, Fn_RangAu(s.jours, depuis));
+  return s.jours.slice(i0).map((j, i) => ({ etiquette: Fmt_Jour(j), v: s.clotures[i0 + i], jour: j }));
+}
+function Fn_TitresCours() {
+  const c = Fn_Derniere(), detenus = c ? c.positions.slice().sort((a, b) => b.valeur - a.valeur) : [];
+  const passes = Fn_ListeSymboles().titres.filter(t => !t.detenu);
+  return { detenus, passes };
+}
+function Fn_RendreCours() {
+  const c = Fn_Derniere(); if (!c) return;
+  const jeton = !!Lire_Local(Cst_CleJeton), idx = Var_Cours.index;
+  let etat;
+  if (!jeton) etat = 'Pour afficher les cours, il faut une fois une clé d’accès GitHub (réglages en bas de cette carte).';
+  else if (Var_Cours.enCours) etat = 'Mise à jour des cours…';
+  else if (idx) etat = 'Cours du ' + Fmt_DateHeure(Date.parse(idx.maj)) + ' (robot) · ' + (idx.series || []).length + ' séries'
+    + ((idx.introuvables || []).length ? ' · ' + idx.introuvables.length + ' titre(s) introuvable(s), voir les réglages' : '');
+  else etat = 'Aucun cours pour l’instant.';
+  if (Var_Cours.erreur) etat += ' — ' + Var_Cours.erreur;
+  $('cours-etat').textContent = etat;
+  const { detenus, passes } = Fn_TitresCours();
+  if (!Var_Vue.isin || ![...detenus, ...passes].some(t => t.isin === Var_Vue.isin)) Var_Vue.isin = detenus.length ? detenus[0].isin : null;
+  $('s-titre').innerHTML = '<optgroup label="Détenus">' + detenus.map(p => '<option value="' + Fn_Esc(p.isin) + '"' + (p.isin === Var_Vue.isin ? ' selected' : '') + '>' + Fn_Esc(p.nom) + '</option>').join('') + '</optgroup>'
+    + (passes.length ? '<optgroup label="Vendus (relevé)">' + passes.map(t => '<option value="' + Fn_Esc(t.isin) + '"' + (t.isin === Var_Vue.isin ? ' selected' : '') + '>' + Fn_Esc(t.nom || t.isin) + '</option>').join('') + '</optgroup>' : '');
+  $('s-titre').onchange = e => { Var_Vue.isin = e.target.value; Fn_RendreCours(); };
+  const aMinute = !!(Var_Cours.minute[Var_Vue.isin] && Var_Cours.minute[Var_Vue.isin].t && Var_Cours.minute[Var_Vue.isin].t.length);
+  const court = Var_Vue.periode === '1J' || Var_Vue.periode === '5J';
+  if (!court) Var_Vue.resolution = 'jour';
+  $('b-periodes').innerHTML = Cst_Periodes.map(p => '<button data-p="' + p[0] + '" aria-pressed="' + (p[0] === Var_Vue.periode) + '">' + p[1] + '</button>').join('');
+  $('b-resolution').innerHTML = '<button data-r="minute" aria-pressed="' + (Var_Vue.resolution === 'minute') + '"' + (court && aMinute ? '' : ' disabled') + '>1 min</button>'
+    + '<button data-r="jour" aria-pressed="' + (Var_Vue.resolution === 'jour') + '">1 jour</button>';
+  document.querySelectorAll('#b-periodes button').forEach(b => b.onclick = () => { Var_Vue.periode = b.dataset.p; if ((b.dataset.p === '1J' || b.dataset.p === '5J') && aMinute) Var_Vue.resolution = 'minute'; Fn_RendreCours(); });
+  document.querySelectorAll('#b-resolution button').forEach(b => b.onclick = () => { if (!b.disabled) { Var_Vue.resolution = b.dataset.r; Fn_RendreCours(); } });
+  const pos = c.positions.find(p => p.isin === Var_Vue.isin) || null;
+  const pts = Var_Vue.isin ? Fn_PointsCours(Var_Vue.isin, Var_Vue.periode, Var_Vue.resolution) : null;
+  const ops = Var_Vue.resolution === 'jour' ? Fn_Operations(Fn_Mouvements(), Var_Vue.isin) : [];
+  Fn_GrapheCours(pts, pos, ops);
+  Fn_RendreStatsCours(pts, pos, ops);
+  Fn_RendreReglagesCours();
+}
+function Fn_GrapheCours(pts, pos, ops) {
+  const zone = $('g-cours'); zone.innerHTML = '';
+  if (!pts || pts.length < 2) {
+    const intro = Var_Cours.index && (Var_Cours.index.introuvables || []).find(x => x.isin === Var_Vue.isin);
+    zone.innerHTML = '<div class="muet" style="padding:16px 0">' + (intro ? 'Titre introuvable chez Yahoo Finance (renommé, radié ou autre place) : corrigez son symbole dans les réglages ci-dessous.'
+      : Lire_Local(Cst_CleJeton) ? 'Pas de cours pour ce titre et cette période.' : 'Les cours apparaîtront ici une fois l’accès GitHub configuré.') + '</div>';
+    return;
+  }
+  const W = zone.clientWidth, H = 230, g = 54, d = 12, h = 12, b = 26, dev = (pos && pos.dev) || (Fn_Serie(Var_Vue.isin) || {}).devise || '';
+  const vals = pts.map(p => p.v);
+  let vMin = Math.min(...vals), vMax = Math.max(...vals);
+  const pru = pos && pos.pru > 0 ? pos.pru : null;
+  const pruVisible = pru != null && pru >= vMin * 0.7 && pru <= vMax * 1.3;
+  if (pruVisible) { vMin = Math.min(vMin, pru); vMax = Math.max(vMax, pru); }
+  const ecart = Math.max(vMax - vMin, vMax * 0.01); vMin -= ecart * 0.08; vMax += ecart * 0.08;
+  const X = i => g + (W - g - d) * i / (pts.length - 1), Y = v => h + (H - h - b) * (1 - (v - vMin) / (vMax - vMin));
+  const svg = El('svg', { viewBox: '0 0 ' + W + ' ' + H, height: H, role: 'img', 'aria-label': 'Cours de ' + ((pos && pos.nom) || Var_Vue.isin) }, zone);
+  const pas = Fn_PasRond(vMax - vMin), fmt = v => Fmt_Nb(v, v >= 1000 ? 0 : v >= 10 ? 1 : 2);
+  for (let v = Math.ceil(vMin / pas) * pas; v <= vMax; v += pas) {
+    El('line', { x1: g, x2: W - d, y1: Y(v), y2: Y(v), stroke: 'var(--grille)', 'stroke-width': 1 }, svg);
+    Txt({ x: g - 6, y: Y(v) + 4, 'text-anchor': 'end', class: 'axe-txt' }, fmt(v), svg);
+  }
+  const marques = W < 420 ? [0, pts.length - 1] : [0, Math.floor((pts.length - 1) / 2), pts.length - 1];
+  marques.forEach((i, k) => Txt({ x: X(i), y: H - 6, 'text-anchor': k === 0 ? 'start' : k === marques.length - 1 ? 'end' : 'middle', class: 'axe-txt' }, pts[i].etiquette, svg));
+  if (pruVisible) {
+    El('line', { x1: g, x2: W - d, y1: Y(pru), y2: Y(pru), stroke: 'var(--muet)', 'stroke-width': 1 }, svg);
+    Txt({ x: g + 4, y: Y(pru) - 4, class: 'axe-txt' }, 'PRU ' + fmt(pru), svg);
+  }
+  El('path', { d: 'M' + pts.map((p, i) => X(i).toFixed(1) + ',' + Y(p.v).toFixed(1)).join('L'), fill: 'none', stroke: 'var(--serie-1)', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, svg);
+  // Achats (▲, sous le prix) et ventes (▼, au-dessus) du relevé, à leur date et à leur prix.
+  const jours = pts.map(p => p.jour);
+  const visibles = (ops || []).filter(o => o.date >= jours[0] && o.date <= jours[jours.length - 1] && o.prix >= vMin && o.prix <= vMax);
+  visibles.forEach(o => {
+    const i = Math.max(0, Fn_RangAu(jours, o.date)), x = X(i), y = Y(o.prix), achat = o.type === 'achat';
+    El('path', { d: achat ? 'M' + x + ',' + (y + 2) + 'l-5,9h10z' : 'M' + x + ',' + (y - 2) + 'l-5,-9h10z', fill: 'var(--encre)', stroke: 'var(--surface)', 'stroke-width': 1.5 }, svg);
+  });
+  const bulle = Fn_Bulle(zone);
+  const ret = El('line', { y1: h, y2: H - b, stroke: 'var(--axe)', 'stroke-width': 1, visibility: 'hidden' }, svg);
+  const pt = El('circle', { r: 4.5, fill: 'var(--serie-1)', stroke: 'var(--surface)', 'stroke-width': 2, visibility: 'hidden' }, svg);
+  const cible = El('rect', { x: g, y: 0, width: W - g - d, height: H - b, fill: 'transparent' }, svg);
+  const suivre = ev => {
+    const r = svg.getBoundingClientRect(), i = Math.max(0, Math.min(pts.length - 1, Math.round(((ev.clientX - r.left) * W / r.width - g) / (W - g - d) * (pts.length - 1))));
+    ret.setAttribute('x1', X(i)); ret.setAttribute('x2', X(i)); ret.setAttribute('visibility', 'visible');
+    pt.setAttribute('cx', X(i)); pt.setAttribute('cy', Y(pts[i].v)); pt.setAttribute('visibility', 'visible');
+    const var0 = (pts[i].v / pts[0].v - 1) * 100, op = visibles.filter(o => o.date === pts[i].jour);
+    bulle.montrer('<b>' + Fn_Esc(pts[i].etiquette) + '</b><br>' + fmt(pts[i].v) + ' ' + Fn_Esc(dev) + ' · ' + Fmt_Pct(var0, 1, true) + ' sur la période'
+      + op.map(o => '<br>' + (o.type === 'achat' ? '▲ achat ' : '▼ vente ') + Fmt_Nb(o.qte, 0) + ' à ' + fmt(o.prix)).join(''), X(i), Y(pts[i].v), Y(pts[i].v));
+  };
+  cible.addEventListener('pointermove', suivre); cible.addEventListener('pointerdown', suivre);
+  cible.addEventListener('pointerleave', () => { bulle.cacher(); ret.setAttribute('visibility', 'hidden'); pt.setAttribute('visibility', 'hidden'); });
+}
+function Fn_RendreStatsCours(pts, pos, ops) {
+  if (!pts || pts.length < 2) { $('cours-stats').innerHTML = ''; return; }
+  const v = pts.map(p => p.v), dernier = v[v.length - 1], variation = (dernier / v[0] - 1) * 100;
+  const haut = Math.max(...v), bas = Math.min(...v);
+  const vol = Var_Vue.resolution === 'jour' && v.length > 20 ? Fn_Volatilite(Fn_Rendements(v)) : null;
+  const tuile = (lib, val, cls) => '<div class="tuile"><div class="lib">' + lib + '</div><div class="val ' + (cls || '') + '" style="font-size:16px">' + val + '</div></div>';
+  const isin = Var_Vue.isin, nomActuel = pos ? pos.nom : ((Fn_ListeSymboles().titres.find(t => t.isin === isin) || {}).nom || '');
+  const anciens = Fn_NomsSuccessifs(Fn_Mouvements(), isin, nomActuel);
+  const toutesOps = Fn_Operations(Fn_Mouvements(), isin);
+  const corr = Var_Cours.index && ((Var_Cours.index.series || []).find(s => s.id === isin) || {}).symbole;
+  $('cours-stats').innerHTML = '<div class="tuiles" style="margin-top:8px">'
+    + tuile('Sur la période', Fmt_Pct(variation, 1, true), Cls_Signe(variation))
+    + tuile('Dernier cours', Fmt_Nb(dernier, 3))
+    + tuile('Plus haut · plus bas', Fmt_Nb(haut, 2) + ' · ' + Fmt_Nb(bas, 2))
+    + (pos && pos.pru ? tuile('Écart au PRU', Fmt_Pct((dernier / pos.pru - 1) * 100, 1, true), Cls_Signe(dernier - pos.pru)) : '')
+    + (vol != null ? tuile('Volatilité annualisée', Fmt_Pct(vol * 100, 1)) : '')
+    + '</div><div class="muet" style="margin-top:6px">' + (pos && pos.pru && (pos.pru < bas * 0.7 || pos.pru > haut * 1.3) ? 'PRU ' + Fmt_Nb(pos.pru, 3) + ', hors du graphique · ' : '')
+    + 'ISIN ' + Fn_Esc(isin) + (corr ? ' · Yahoo ' + Fn_Esc(corr) : '')
+    + (anciens.length ? ' · anciens noms : ' + anciens.map(a => Fn_Esc(a.nom) + ' (' + Fmt_Jour(a.du) + ' → ' + Fmt_Jour(a.au) + ')').join(', ') : '') + '</div>'
+    + (toutesOps.length ? '<details><summary>' + toutesOps.length + ' achat(s) et vente(s) dans le relevé</summary><div class="defile"><table><thead><tr><th>Date</th><th>Opération</th><th>Qté</th><th>Prix</th></tr></thead><tbody>'
+      + toutesOps.slice().reverse().map(o => '<tr><td>' + Fmt_Jour(o.date) + '</td><td>' + (o.type === 'achat' ? '▲ achat' : '▼ vente') + '</td><td>' + Fmt_Nb(o.qte, 0) + '</td><td>' + Fmt_Nb(o.prix, 3) + ' ' + Fn_Esc(Cst_DevSymbole[o.dev] || o.dev) + '</td></tr>').join('')
+      + '</tbody></table></div></details>' : '');
+}
+function Fn_RendreReglagesCours() {
+  const jeton = Lire_Local(Cst_CleJeton), r = Fn_Reglages(), idx = Var_Cours.index;
+  $('r-cours').innerHTML = '<div class="muet">Les cours viennent d’un robot qui tourne chaque soir de semaine sur GitHub (dépôt privé <b>' + Fn_Esc(r.depot) + '</b>) : '
+    + 'clôtures quotidiennes depuis le premier achat, cours à la minute des 5 derniers jours, change de la BCE. Il lui faut la liste de vos titres, '
+    + 'que cette page lui envoie ; pour cela, une <b>clé d’accès GitHub</b> limitée à ce seul dépôt :</div>'
+    + '<ol class="muet" style="margin:6px 0 6px 18px;padding:0"><li>github.com → photo de profil → <b>Settings</b> → <b>Developer settings</b> → <b>Personal access tokens</b> → <b>Fine-grained tokens</b> → <b>Generate new token</b> ;</li>'
+    + '<li>nom « Portefeuille », expiration 1 an ; <b>Repository access</b> : <i>Only select repositories</i> → <b>' + Fn_Esc(r.depot.split('/')[1]) + '</b> ;</li>'
+    + '<li><b>Permissions</b> → <b>Contents</b> : <i>Read and write</i> ; <b>Generate token</b>, copiez-la et collez-la ici.</li></ol>'
+    + '<div class="reglage"><input type="password" id="i-jeton" placeholder="github_pat_…" value="" style="flex:1;min-width:180px" autocomplete="off">'
+    + '<button id="b-jeton">' + (jeton ? 'Remplacer' : 'Enregistrer') + '</button>' + (jeton ? '<button id="b-jeton-effacer">Effacer</button>' : '') + '</div>'
+    + (jeton ? '<div class="muet">Clé enregistrée dans ce navigateur (…' + Fn_Esc(jeton.slice(-4)) + '), jamais dans les sauvegardes.</div>' : '')
+    + '<div class="rang"><button id="b-cours-maj"' + (jeton ? '' : ' disabled') + '>Mettre à jour maintenant</button></div>'
+    + (idx ? '<h2 style="margin-top:10px">Titres suivis par le robot</h2><div class="defile"><table><thead><tr><th>Titre</th><th>Symbole</th><th>Cours</th></tr></thead><tbody>'
+      + (idx.series || []).filter(s => !/^(FX|IDX)-/.test(s.id)).map(s => '<tr><td>' + Fn_Esc(Fn_NomTitre(s.id)) + '</td><td>' + Fn_Esc(s.symbole) + '</td><td>' + s.nb + ' j · ' + Fmt_Jour(s.du) + ' → ' + Fmt_Jour(s.au) + (s.minute ? ' · minute' : '') + '</td></tr>').join('')
+      + '</tbody></table></div>' : '')
+    + (idx && (idx.introuvables || []).length ? '<h2 style="margin-top:10px">Introuvables (renommés, radiés ou cotés ailleurs)</h2><div class="muet">Indiquez le symbole Yahoo Finance du titre (ex. « ALO.PA », « RIO.L »). '
+      + 'Pour un titre renommé, c’est son symbole ACTUEL ; un titre radié n’a souvent plus de cours.</div>'
+      + idx.introuvables.map(x => '<div class="reglage"><span style="min-width:150px">' + Fn_Esc(x.nom || x.isin) + ' <span class="muet">' + Fn_Esc(x.isin) + '</span></span>'
+        + '<input type="text" data-corr="' + Fn_Esc(x.isin) + '" placeholder="symbole" value="' + Fn_Esc((Var_Etat.corrSymboles || {})[x.isin] || '') + '" style="width:110px"></div>').join('')
+      + '<div class="rang"><button id="b-corr">Envoyer les corrections au robot</button></div>' : '')
+    + (idx && (idx.erreurs || []).length ? '<div class="note note-warn">Dernier passage du robot : ' + idx.erreurs.map(Fn_Esc).join(' ; ') + '</div>' : '');
+  $('b-jeton').onclick = () => { const v = $('i-jeton').value.trim(); if (!v) return; Ecrire_Local(Cst_CleJeton, v); Fn_ChargerCours(true); };
+  if ($('b-jeton-effacer')) $('b-jeton-effacer').onclick = () => { Ecrire_Local(Cst_CleJeton, ''); Fn_RendreCours(); };
+  $('b-cours-maj').onclick = () => Fn_ChargerCours(true);
+  if ($('b-corr')) $('b-corr').onclick = () => {
+    document.querySelectorAll('#r-cours [data-corr]').forEach(i => { const v = i.value.trim().toUpperCase(); if (v) Var_Etat.corrSymboles[i.dataset.corr] = v; else delete Var_Etat.corrSymboles[i.dataset.corr]; });
+    Fn_Sauver(); Fn_ChargerCours(true);
+  };
+}
+function Fn_NomTitre(isin) {
+  const c = Fn_Derniere(), p = c && c.positions.find(x => x.isin === isin);
+  return p ? p.nom : ((Fn_ListeSymboles().titres.find(t => t.isin === isin) || {}).nom || isin);
+}
+
+/* =====================================================================
+   ANALYSE PAR CLAUDE — SDK officiel (@anthropic-ai/sdk), chargé à la demande,
+   appelé depuis ce navigateur avec la clé de Vigie. Sortie structurée par un
+   outil « rapport » à schéma strict ; relais de secours côté serveur
+   (fallbacks: "default") en cas de refus d'un filtre de sécurité.
+   ===================================================================== */
+const Cst_SdkClaude = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.3.0/+esm';
+const Cst_Modeles = { 'claude-opus-5-5': { nom: 'Claude Opus 5.5', e: 4, s: 20, lc: 0.2, ec: 5 }, 'claude-sonnet-5-5': { nom: 'Claude Sonnet 5.5', e: 2, s: 10, lc: 0.2, ec: 2.5 } };
+const Cst_PrixRecherche = 0.01;   // 10 $ les 1 000 recherches web
+const Cst_OutilRapport = {
+  name: 'rapport', strict: true,
+  description: 'Rend l’analyse du portefeuille sous forme structurée. À appeler UNE seule fois, à la fin, avec la synthèse, les avertissements et les propositions.',
+  input_schema: { type: 'object', additionalProperties: false, required: ['synthese', 'avertissements', 'propositions', 'sources'], properties: {
+    synthese: { type: 'string', description: 'Trois à six phrases : l’état général du portefeuille et ce qui compte le plus.' },
+    avertissements: { type: 'array', description: 'Du plus important au moins important.', items: { type: 'object', additionalProperties: false, required: ['gravite', 'titre', 'detail', 'lignes'], properties: {
+      gravite: { type: 'string', enum: ['important', 'attention', 'info'] }, titre: { type: 'string' }, detail: { type: 'string' },
+      lignes: { type: 'array', items: { type: 'string' }, description: 'Noms des lignes concernées (vide si tout le portefeuille).' } } } },
+    propositions: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['type', 'titre', 'raison'], properties: {
+      type: { type: 'string', enum: ['renforcer', 'alleger', 'vendre', 'surveiller', 'nouvelle_idee'] }, titre: { type: 'string', description: 'Ligne concernée, ou action proposée (nom et ticker).' },
+      raison: { type: 'string' } } } },
+    sources: { type: 'array', description: 'Pages web utilisées (vide en analyse rapide).', items: { type: 'object', additionalProperties: false, required: ['titre', 'url'], properties: { titre: { type: 'string' }, url: { type: 'string' } } } } } }
+};
+// Ce qui part chez Anthropic : les chiffres du portefeuille, sans nom de titulaire ni identifiant de compte.
+function Fn_DonneesAnalyse(k) {
+  const c = Fn_Derniere(), tot = c.positions.reduce((s, p) => s + p.valeur, 0), ilYa = n => Fn_Jour(Date.now() - n * 86400000);
+  const r1 = x => x == null || !isFinite(x) ? null : Math.round(x * 10) / 10;
+  return {
+    date: Fn_Jour(c.ts), compte: 'DEGIRO, profil sans crédit : ni marge, ni produits à levier',
+    valeur_nette_eur: Math.round(k.vl), valeur_titres_eur: Math.round(k.titres), liquidites_eur: k.cash == null ? null : Math.round(k.cash),
+    plus_value_latente_eur: Math.round(k.plLat), plus_value_latente_pct: r1(k.plPct), xirr_pct: k.xirr == null ? null : r1(k.xirr * 100),
+    versements_nets_eur: k.verse == null ? null : Math.round(k.verse), dividendes_nets_eur: k.dividendes == null ? null : Math.round(k.dividendes),
+    frais_payes_eur: k.frais == null ? null : Math.round(-k.frais),
+    positions: c.positions.slice().sort((a, b) => b.valeur - a.valeur).map(p => {
+      const s = Fn_Serie(p.isin), un = s ? s.clotures.slice(Math.max(0, Fn_RangAu(s.jours, ilYa(365)))) : null;
+      const haut = un && un.length ? Math.max(...un) : null, mm = s && s.clotures.length >= 200 ? Fn_Moyenne(s.clotures.slice(-200)) : null;
+      const anciens = Fn_NomsSuccessifs(Fn_Mouvements(), p.isin, p.nom).map(a => a.nom);
+      return { nom: p.nom, ticker: p.ticker, isin: p.isin, pays: p.isin.slice(0, 2), devise: p.dev, poids_pct: r1(p.valeur / tot * 100), valeur_eur: Math.round(p.valeur),
+        plus_value_pct: r1(p.plPct), cours: p.cours, pru: p.pru,
+        perf_1_mois_pct: r1(Fn_PerformanceSerie(s, ilYa(31))), perf_1_an_pct: r1(Fn_PerformanceSerie(s, ilYa(365))),
+        ecart_au_plus_haut_1_an_pct: haut ? r1((s.clotures[s.clotures.length - 1] / haut - 1) * 100) : null,
+        sous_moyenne_200_jours: mm == null ? null : s.clotures[s.clotures.length - 1] < mm, anciens_noms: anciens };
+    }),
+    indicateurs: Fn_EvaluerTous(k).map(r => ({ nom: r.ind.nom, valeur: r.statut === 'attente' ? null : Fn_FmtIndicateur(r.ind, r.valeur), etat: Cst_Etats[r.statut][1], detail: r.statut === 'attente' ? r.manquant : r.detail }))
+  };
+}
+function Fn_ConsignesAnalyse(web) {
+  return 'Tu aides un particulier à suivre son portefeuille d’actions, détenu chez DEGIRO sur un compte sans crédit (ni marge, ni produits à levier, ni vente à découvert). '
+    + 'Tu reçois ses chiffres en JSON : positions avec poids, plus-values, tendances de cours, et des indicateurs déjà calculés.\n\n'
+    + 'Ta mission :\n1. repérer ce qui mérite son attention — concentration, lignes en forte perte ou en tendance baissière, devises, frais, liquidités, '
+    + 'événements à venir — et le formuler en avertissements clairs, du plus important au moins important ;\n'
+    + '2. proposer des pistes concrètes : renforcer, alléger, vendre ou surveiller une ligne, ou une nouvelle idée d’action qui améliorerait la diversification, '
+    + 'chacune justifiée par les chiffres fournis' + (web ? ' et par l’actualité trouvée' : '') + '.\n\n'
+    + (web ? 'Cherche sur le web l’actualité récente des principales lignes (résultats, prévisions, événements) et, pour une nouvelle idée, de quoi la justifier. '
+      + 'Cite les pages utilisées dans « sources ».\n' : 'Appuie-toi uniquement sur les données fournies : pas de recherche, pas d’actualité supposée.\n')
+    + 'Règles : français simple ; aucun chiffre inventé ; dis quand une information manque ou est incertaine ; '
+    + 'la décision appartient à l’investisseur, tes propositions ne sont pas des ordres.\n'
+    + 'Termine en appelant l’outil « rapport » une seule fois, avec ta synthèse, tes avertissements et tes propositions.';
+}
+function Fn_EstimationAnalyse(web, m) {
+  const p = Cst_Modeles[m], entree = (Fn_ConsignesAnalyse(web).length + JSON.stringify(Fn_DonneesAnalyse(Fn_Calculs())).length + 3000) / 3;
+  const bas = web ? (entree * 4 + 30000) * p.e / 1e6 + 8000 * p.s / 1e6 + 3 * Cst_PrixRecherche : entree * p.e / 1e6 + 3000 * p.s / 1e6;
+  const haut = web ? (entree * 8 + 120000) * p.e / 1e6 + 20000 * p.s / 1e6 + 8 * Cst_PrixRecherche : entree * p.e / 1e6 + 12000 * p.s / 1e6;
+  return [bas, haut];
+}
+const Fmt_Dollar = v => new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(v);
+function Fn_CoutAnalyse(u, m) {
+  const p = Cst_Modeles[m] || Cst_Modeles['claude-opus-5-5'];
+  return (u.input_tokens * p.e + u.output_tokens * p.s + (u.cache_read_input_tokens || 0) * p.lc + (u.cache_creation_input_tokens || 0) * p.ec) / 1e6 + (u.recherches || 0) * Cst_PrixRecherche;
+}
+function Fn_DemanderAnalyse(web) {
+  const cle = Lire_Local(Cst_CleApi), r = Fn_Reglages();
+  if (!cle) { $('analyse-confirmer').innerHTML = '<div class="note note-warn">Enregistrez d’abord la clé API (ci-dessus).</div>'; return; }
+  const [bas, haut] = Fn_EstimationAnalyse(web, r.modele);
+  $('analyse-confirmer').innerHTML = '<div class="note note-warn">' + (web ? 'Analyse avec l’actualité (recherche web)' : 'Analyse rapide (vos chiffres seulement)')
+    + ' par ' + Fn_Esc(Cst_Modeles[r.modele].nom) + ' : coût estimé <b>' + Fmt_Dollar(bas) + ' à ' + Fmt_Dollar(haut) + '</b>, débité sur votre compte API Anthropic. '
+    + 'Les chiffres du portefeuille (sans nom ni identifiant) sont envoyés à Anthropic.<div class="rang"><button class="accent" id="b-analyse-go">Lancer</button><button id="b-analyse-non">Annuler</button></div></div>';
+  $('b-analyse-go').onclick = () => Fn_LancerAnalyse(web);
+  $('b-analyse-non').onclick = () => { $('analyse-confirmer').innerHTML = ''; };
+}
+async function Fn_LancerAnalyse(web) {
+  const r = Fn_Reglages(), m = r.modele, debut = Date.now();
+  $('analyse-confirmer').innerHTML = '<div class="note">Analyse en cours… ' + (web ? '(avec recherche web : une à trois minutes)' : '(quelques dizaines de secondes)') + '</div>';
+  let Anthropic;
+  try { Anthropic = (await import(Cst_SdkClaude)).default; }
+  catch (e) { $('analyse-confirmer').innerHTML = '<div class="note note-crit">Le module Claude n’a pas pu être chargé (connexion ?). ' + Fn_Esc(e.message) + '</div>'; return; }
+  const client = new Anthropic({ apiKey: Lire_Local(Cst_CleApi), dangerouslyAllowBrowser: true });
+  const donnees = Fn_DonneesAnalyse(Fn_Calculs());
+  const tools = (web ? [{ type: 'web_search_20260209', name: 'web_search', max_uses: 8 }] : []).concat([Cst_OutilRapport]);
+  const question = { role: 'user', content: 'Voici mon portefeuille au ' + donnees.date + ' :\n```json\n' + JSON.stringify(donnees, null, 1) + '\n```' };
+  const cumul = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, recherches: 0 };
+  let suite = [], final = null, modeleServi = m;
+  try {
+    // Une réponse avec recherche web peut s'interrompre (« pause_turn ») : on la relance telle quelle, au plus 4 fois.
+    for (let tour = 0; tour < 5; tour++) {
+      const messages = [question].concat(suite.length ? [{ role: 'assistant', content: suite }] : []);
+      const flux = client.beta.messages.stream({
+        model: m, max_tokens: 32000, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default',
+        thinking: { type: 'adaptive' }, output_config: { effort: r.effort },
+        system: Fn_ConsignesAnalyse(web), tools, tool_choice: { type: 'auto' }, messages });
+      const rep = await flux.finalMessage();
+      const u = rep.usage || {};
+      ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'].forEach(x => { cumul[x] += u[x] || 0; });
+      cumul.recherches += (u.server_tool_use && u.server_tool_use.web_search_requests) || 0;
+      modeleServi = rep.model || m;
+      if (rep.stop_reason === 'pause_turn') { suite = suite.concat(rep.content); continue; }
+      final = rep; break;
+    }
+  } catch (e) {
+    const msg = e instanceof Anthropic.AuthenticationError ? 'clé API refusée : vérifiez-la dans Vigie ou ci-dessus.'
+      : e instanceof Anthropic.PermissionDeniedError ? 'cette clé n’a pas accès à ce modèle.'
+      : e instanceof Anthropic.RateLimitError ? 'trop de demandes ou crédit épuisé : réessayez plus tard, ou vérifiez votre crédit sur console.anthropic.com.'
+      : e instanceof Anthropic.BadRequestError ? 'demande refusée par l’API : ' + e.message
+      : e instanceof Anthropic.APIError ? 'erreur de l’API (' + e.status + ') : ' + e.message
+      : 'échec de la connexion : ' + e.message;
+    $('analyse-confirmer').innerHTML = '<div class="note note-crit">Analyse impossible — ' + Fn_Esc(msg) + '</div>';
+    return;
+  }
+  const cout = Fn_CoutAnalyse(cumul, modeleServi);
+  if (!final) { $('analyse-confirmer').innerHTML = '<div class="note note-crit">L’analyse ne s’est pas terminée (trop d’interruptions). Coût : ' + Fmt_Dollar(cout) + '.</div>'; return; }
+  if (final.stop_reason === 'refusal') { $('analyse-confirmer').innerHTML = '<div class="note note-crit">Claude a refusé cette demande' + (final.stop_details && final.stop_details.category ? ' (' + Fn_Esc(final.stop_details.category) + ')' : '') + '. Coût : ' + Fmt_Dollar(cout) + '.</div>'; return; }
+  const outil = final.content.find(b => b.type === 'tool_use' && b.name === 'rapport');
+  const texte = final.content.filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
+  const rapport = outil ? outil.input : { synthese: texte || 'Réponse sans rapport structuré.', avertissements: [], propositions: [], sources: [] };
+  Var_Etat.analyses = [{ ts: Date.now(), web, modele: modeleServi, cout, duree: Math.round((Date.now() - debut) / 1000), usage: cumul, rapport, tronque: final.stop_reason === 'max_tokens' }].concat(Var_Etat.analyses || []).slice(0, 10);
+  Fn_Sauver();
+  $('analyse-confirmer').innerHTML = '';
+  Fn_RendreAnalyse();
+}
+function Fn_RendreAnalyse() {
+  const cle = Lire_Local(Cst_CleApi), r = Fn_Reglages();
+  $('analyse-cle').innerHTML = cle ? '<div class="muet" style="margin-top:6px">Clé API : celle de Vigie (…' + Fn_Esc(cle.slice(-4)) + '), dans ce navigateur. Modèle : ' + Fn_Esc(Cst_Modeles[r.modele].nom) + '.</div>'
+    : '<div class="note note-warn">Aucune clé API dans ce navigateur. Saisissez-la dans Vigie (Paramètres → Accès API) ou ici : les deux pages partagent la même.'
+      + '<div class="reglage"><input type="password" id="i-cle" placeholder="sk-ant-…" autocomplete="off" style="flex:1;min-width:180px"><button id="b-cle">Enregistrer</button></div></div>';
+  if ($('b-cle')) $('b-cle').onclick = () => { const v = $('i-cle').value.trim(); if (v) { Ecrire_Local(Cst_CleApi, v); Fn_RendreAnalyse(); } };
+  $('b-analyse-rapide').onclick = () => Fn_DemanderAnalyse(false);
+  $('b-analyse-web').onclick = () => Fn_DemanderAnalyse(true);
+  const a = (Var_Etat.analyses || [])[0];
+  const typeLib = { renforcer: 'Renforcer', alleger: 'Alléger', vendre: 'Vendre', surveiller: 'Surveiller', nouvelle_idee: 'Nouvelle idée' };
+  const grav = { important: ['✕', 'important', 'etat-alerte'], attention: ['!', 'attention', 'etat-moyen'], info: ['i', 'info', 'etat-attente'] };
+  $('analyse-resultat').innerHTML = !a ? '' : '<div class="muet" style="margin-top:8px">Analyse du ' + Fmt_DateHeure(a.ts) + ' · ' + (a.web ? 'avec l’actualité' : 'rapide') + ' · '
+      + Fn_Esc((Cst_Modeles[a.modele] || { nom: a.modele }).nom) + ' · ' + a.duree + ' s · coût ' + Fmt_Dollar(a.cout) + (a.usage.recherches ? ' dont ' + a.usage.recherches + ' recherche(s) web' : '') + '</div>'
+    + (a.tronque ? '<div class="note note-warn">Réponse coupée (trop longue).</div>' : '')
+    + '<h3>Synthèse</h3><p>' + Fn_Esc(a.rapport.synthese) + '</p>'
+    + (a.rapport.avertissements.length ? '<h3>Avertissements</h3>' + a.rapport.avertissements.map(x => { const g = grav[x.gravite] || grav.info;
+      return '<div class="item"><span class="etat ' + g[2] + '">' + g[0] + ' ' + g[1] + '</span> <b>' + Fn_Esc(x.titre) + '</b><p>' + Fn_Esc(x.detail) + '</p>'
+        + (x.lignes.length ? '<div class="muet">' + x.lignes.map(Fn_Esc).join(' · ') + '</div>' : '') + '</div>'; }).join('') : '')
+    + (a.rapport.propositions.length ? '<h3>Propositions</h3>' + a.rapport.propositions.map(x => '<div class="item"><span class="badge">' + Fn_Esc(typeLib[x.type] || x.type) + '</span><b>' + Fn_Esc(x.titre) + '</b><p>' + Fn_Esc(x.raison) + '</p></div>').join('') : '')
+    + (a.rapport.sources.length ? '<h3>Sources</h3>' + a.rapport.sources.map(s => '<div class="muet">' + Fn_Esc(s.titre) + ' — ' + (/^https?:\/\//.test(s.url) ? '<a href="' + Fn_Esc(s.url) + '" target="_blank" rel="noopener noreferrer">' + Fn_Esc(s.url) + '</a>' : Fn_Esc(s.url)) + '</div>').join('') : '')
+    + ((Var_Etat.analyses || []).length > 1 ? '<details><summary>Analyses précédentes</summary>' + Var_Etat.analyses.slice(1).map(x => '<div class="muet">' + Fmt_DateHeure(x.ts) + ' · ' + (x.web ? 'web' : 'rapide') + ' · ' + Fmt_Dollar(x.cout) + ' — ' + Fn_Esc(x.rapport.synthese.slice(0, 160)) + '…</div>').join('') + '</details>' : '');
+  $('r-analyse').innerHTML = '<div class="reglage">Modèle <select id="s-modele">' + Object.keys(Cst_Modeles).map(id => '<option value="' + id + '"' + (id === r.modele ? ' selected' : '') + '>' + Fn_Esc(Cst_Modeles[id].nom) + ' (' + Cst_Modeles[id].e + ' $ / ' + Cst_Modeles[id].s + ' $ le million de jetons)</option>').join('') + '</select></div>'
+    + '<div class="reglage">Profondeur de réflexion <select id="s-effort">' + [['low', 'faible'], ['medium', 'moyenne'], ['high', 'élevée']].map(e => '<option value="' + e[0] + '"' + (e[0] === r.effort ? ' selected' : '') + '>' + e[1] + '</option>').join('') + '</select></div>'
+    + '<div class="muet">Sonnet 5.5 coûte deux fois moins qu’Opus 5.5 ; une réflexion plus profonde coûte davantage. En cas de refus par un filtre de sécurité, la demande est rejouée automatiquement sur un autre modèle (relais de secours d’Anthropic).</div>';
+  $('s-modele').onchange = e => { Var_Etat.reglages = Object.assign(Var_Etat.reglages || {}, { modele: e.target.value }); Fn_Sauver(); Fn_RendreAnalyse(); };
+  $('s-effort').onchange = e => { Var_Etat.reglages = Object.assign(Var_Etat.reglages || {}, { effort: e.target.value }); Fn_Sauver(); };
+}
+
+Fn_Theme(); Fn_Rendre(); Fn_ReceptionAuto(); Fn_ChargerCours(false);
 </script>
 </body>
 </html>
