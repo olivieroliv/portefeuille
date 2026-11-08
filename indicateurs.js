@@ -70,10 +70,10 @@ const Cst_Indicateurs = [
       return { valeur: total / ctx.k.titres * 100, detail: Math.round(total).toLocaleString('fr-FR') + ' € nets sur 12 mois' };
     } },
 
-  { id: 'frais_sur_verse', nom: 'Frais payés sur l’argent versé', famille: 'Revenus et coûts', unite: '%', sens: 'bas', vert: 1, rouge: 3, besoin: ['releve'],
-    explication: 'Total des frais (courtage, connexion, change) depuis l’ouverture, rapporté aux versements nets.',
+  { id: 'frais_sur_verse', nom: 'Frais et taxes payés sur l’argent versé', famille: 'Revenus et coûts', unite: '%', sens: 'bas', vert: 1, rouge: 3, besoin: ['releve'],
+    explication: 'Total des coûts depuis l’ouverture — frais du courtier (courtage, connexion aux places, change, ADR) et taxes sur les transactions (TTF, stamp duty) — rapporté aux versements nets.',
     calcul: ctx => (ctx.k.frais == null || !(ctx.k.verse > 0)) ? { manquant: 'relevé de compte' }
-      : { valeur: (-ctx.k.frais || 0) / ctx.k.verse * 100, detail: Math.round(-ctx.k.frais || 0).toLocaleString('fr-FR') + ' € de frais' } },
+      : { valeur: (-ctx.k.frais || 0) / ctx.k.verse * 100, detail: Math.round(-ctx.k.frais || 0).toLocaleString('fr-FR') + ' € de frais et taxes' } },
 
   /* ---------- Concentration ---------- */
   { id: 'ligne_max', nom: 'Poids de la plus grosse ligne', famille: 'Concentration', unite: '%', sens: 'bas', vert: 15, rouge: 25, besoin: ['capture'],

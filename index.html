@@ -339,23 +339,31 @@ function Fn_Jour(ts) {
 const Cst_Types = {
   versement: 'Versement', retrait: 'Retrait', achat: 'Achat', vente: 'Vente', dividende: 'Dividende',
   impot: 'Impôt sur dividende', frais_courtage: 'Frais de courtage', frais_connexion: 'Frais de connexion',
-  frais_change: 'Frais de change', frais: 'Autres frais', interet: 'Intérêts', change: 'Opération de change',
-  interne: 'Transfert interne', regularisation: 'Régularisation (autre)', autre: 'Autre'
+  frais_change: 'Frais de change', taxe: 'Taxe sur transactions (TTF, stamp duty)', frais: 'Autres frais', interet: 'Intérêts',
+  change: 'Opération de change', operation_titres: 'Opération sur titres', interne: 'Transfert interne',
+  regularisation: 'Régularisation (autre)', autre: 'Autre'
 };
 /* L'ORDRE COMPTE : le premier motif reconnu l'emporte. Les transferts internes
    passent avant tout (une « réservation » de versement suivie du versement réel
-   le compterait deux fois) ; l'impôt avant le dividende (« Impôts sur dividende ») ;
-   les frais de change avant le change ; le change avant le retrait (« FX Withdrawal »
-   est une conversion, pas un retrait). Un versement est positif, un retrait négatif. */
+   le compterait deux fois) ; puis les OPÉRATIONS SUR TITRES (« Dividendes en actions :
+   Achat 3 …@0 EUR » est une attribution d'actions gratuites, pas un dividende ;
+   « Changement ISIN », droits et offre de souscription, rompus réglés en espèces) ;
+   l'impôt avant le dividende (« Impôts sur dividende ») ; les frais de connexion avant
+   les frais de change (« New York Stock Exchange » n'est pas du change : le MOT entier
+   est exigé) ; le change avant le retrait (« FX Withdrawal » est une conversion, pas un
+   retrait). Un versement est positif, un retrait négatif. */
+const Cst_ReOst = /^(changement (d['’] ?)?isin|offre de souscription|droits? de souscription|dividendes? en actions|attribution|r[ée]investissement de dividende|r[èe]glement esp[èe]ces|regroupement|division d|fusion|scission|spin[- ]?off|isin change|stock dividend|rights issue|corporate action)/i;
 const Cst_Regles = [
-  ['interne', /cash sweep|transfert (de|vers|depuis|interne)|fonds mon[ée]taires?|money market|r[ée]servation|compte de caisse/i],
+  ['interne', /cash sweep|transfert (de|vers|depuis|interne)|fonds mon[ée]taires?|money market|r[ée]servation|compte de caisse|compte esp[èe]ces|flatex ?degiro bank/i],
+  ['operation_titres', Cst_ReOst],
   ['achat', /^(achat|buy)\b/i],
   ['vente', /^(vente|sell)\b/i],
   ['impot', /imp[ôo]ts?\b.*dividende|retenue (à la source|fiscale)|withholding|dividend tax|pr[ée]l[èe]vements? sociaux/i],
-  ['dividende', /dividende|dividend|coupon|distribution/i],
-  ['frais_change', /frais[^,]*(change|autofx|conversion)|autofx|fx (fee|cost|charge)/i],
-  ['change', /op[ée]ration de change|change de devises?|conversion de devises?|currency (exchange|debit|credit)|fx (debit|credit|withdrawal|deposit)/i],
+  ['dividende', /dividende|dividend|coupon|distribution|remboursement de capital|return of capital|capital repayment/i],
+  ['taxe', /taxe sur les transactions|\bttf\b|stamp duty|financial transaction tax|\bftt\b|imp[ôo]t de bourse/i],
   ['frais_connexion', /frais de connexion|connection fee/i],
+  ['frais_change', /frais[^,]*\b(change|autofx|conversion)\b|autofx|fx (fee|cost|charge)/i],
+  ['change', /op[ée]ration de change|\bchange de devises?|conversion de devises?|currency (exchange|debit|credit)|fx (debit|credit|withdrawal|deposit)/i],
   ['frais_courtage', /courtage|frais de transaction|parties tierces|commission|transaction (fee|costs?)|third part/i],
   ['interet', /int[ée]r[êe]ts?|interest/i],
   ['versement', /versement|d[ée]p[ôo]t|deposit|virement|sofort|ideal/i, 1],
@@ -378,6 +386,7 @@ function Fn_Classer(m, corrections) {
   const n = Fn_Normaliser(m.desc), d = m.desc;
   if (corrections && corrections[n]) return corrections[n];
   if (Cst_Regles[0][1].test(d)) return 'interne';
+  if (Cst_ReOst.test(d)) return 'operation_titres';
   if (/^(achat|buy)\b/i.test(d)) return 'achat';
   if (/^(vente|sell)\b/i.test(d)) return 'vente';
   if (Cst_Regul.test(d)) {
@@ -428,10 +437,14 @@ function Fn_LireReleve(texte) {
   const iDesc = col(/^(description|omschrijving)/), iFx = col(/^fx$/), iMvt = col(/^(mouvements?|change|mutatie|variation)/);
   const iSolde = col(/^(solde|balance|saldo)/), iOrdre = col(/(ordre|order)/);
   if (iDate < 0 || iDesc < 0 || iMvt < 0) return { erreur: 'Ce fichier n’a pas les colonnes d’un relevé DEGIRO (Date, Description, Mouvements). En-têtes lus : ' + lignes[0].join(' · ') };
-  const mouvements = []; let rejets = 0;
+  const mouvements = []; let rejets = 0, informatives = 0;
   lignes.slice(1).forEach(r => {
     const date = Fn_DateCsv(r[iDate]);
-    const montant = Fn_Nombre(r[iMvt + 1]);
+    const brut = String(r[iMvt + 1] == null ? '' : r[iMvt + 1]).trim();
+    const montant = Fn_Nombre(brut);
+    // Ligne datée SANS montant (« Virement vers votre Compte Espèces à la flatexDEGIRO Bank : … », « Conversion
+    // Fonds Monétaires finalisée ») : une information ; l'argent, lui, bouge sur d'autres lignes. Ni comptée, ni rejetée.
+    if (date && brut === '') { informatives++; return; }
     if (!date || montant == null) { rejets++; return; }
     const m = { date, heure: iHeure >= 0 ? (r[iHeure] || '').trim() : '', produit: iProd >= 0 ? (r[iProd] || '').trim() : '',
       isin: iIsin >= 0 ? (r[iIsin] || '').trim() : '', desc: (r[iDesc] || '').trim(), fx: iFx >= 0 ? Fn_Nombre(r[iFx]) : null,
@@ -442,7 +455,7 @@ function Fn_LireReleve(texte) {
     mouvements.push(m);
   });
   if (!mouvements.length) return { erreur: 'Aucun mouvement lisible dans ce fichier.' };
-  return { mouvements, rejets };
+  return { mouvements, rejets, informatives };
 }
 // Fusion de plusieurs relevés : un mouvement déjà connu (même date, heure, libellé, montant ET solde) n'est pas recompté.
 function Fn_Fusionner(existants, nouveaux) {
@@ -612,18 +625,44 @@ function Fn_PerformanceSerie(serie, depuis) {
   const a = Fn_ValeurAu(serie, depuis), b = serie.clotures[serie.clotures.length - 1];
   return a > 0 ? (b / a - 1) * 100 : null;
 }
-/* Achats et ventes d'un titre lus dans le relevé : « Achat 90 Orbis Luxe@48,25 EUR (ISIN) ». Quantité et prix
-   viennent du libellé ; le montant en euros, du mouvement lui-même quand il est en euros. */
-function Fn_Operations(mouvements, isin) {
-  const out = [];
+/* CHANGEMENTS D'ISIN. « Changement ISIN: Vente 100 X@10 EUR (ANCIEN) » et « Changement ISIN: Achat 100 Y@10 EUR
+   (NOUVEAU) », à la même minute, font passer la ligne d'un ISIN à l'autre — souvent depuis un ISIN TEMPORAIRE
+   (actions nouvelles d'une augmentation de capital, « Alstom - Non tradeable »). Le lien rattache au titre actuel
+   les opérations faites sous l'ancien ISIN, et ce produit-là seulement : les droits de souscription (« ALSTOM DS »),
+   cotés sous le même ISIN temporaire, ne sont pas des actions. */
+const Cst_ReChangementIsin = /^changement (d['’] ?)?isin\s*:\s*/i;
+function Fn_LiensIsin(mouvements) {
+  const ventes = {}, liens = [];
+  const qte = d => { const r = /(?:achat|vente|buy|sell)\s+(\d{1,3}(?:[\s\u00a0.]\d{3})*|\d+)\s/i.exec(d || ''); return r ? Fn_Nombre(r[1]) : null; };
   (mouvements || []).forEach(m => {
-    if (m.isin !== isin) return;
-    // Quantité : groupes de milliers de trois chiffres (« 1 307 ») ; prix : le nombre entier après « @ », jusqu'à sa devise.
-    const r = /^(Achat|Vente|Buy|Sell)\s+(\d{1,3}(?:[\s .]\d{3})*|\d+)\s+.*?@\s*(\d[\d\s .,]*\d|\d)\s*(€|\$|£|[A-Z]{3})?(?=\s|\(|$)/i.exec(m.desc || '');
-    if (!r) return;
-    const qte = Fn_Nombre(r[2]), prix = Fn_Nombre(r[3]);
+    if (m.isin && Cst_ReChangementIsin.test(m.desc || '') && /:\s*(vente|sell)\b/i.test(m.desc)) (ventes[m.date + ' ' + m.heure] = ventes[m.date + ' ' + m.heure] || []).push(m);
+  });
+  (mouvements || []).forEach(m => {
+    if (!m.isin || !Cst_ReChangementIsin.test(m.desc || '') || !/:\s*(achat|buy)\b/i.test(m.desc)) return;
+    const autres = (ventes[m.date + ' ' + m.heure] || []).filter(v => v.isin !== m.isin);
+    const v = autres.length === 1 ? autres[0] : autres.find(x => qte(x.desc) != null && qte(x.desc) === qte(m.desc));
+    if (v) liens.push({ de: v.isin, nomDe: Fn_NomCourt(v.produit), produitDe: v.produit, vers: m.isin, date: m.date });
+  });
+  return liens;
+}
+/* Achats et ventes d'un titre lus dans le relevé : « Achat 90 Orbis Luxe@48,25 EUR (ISIN) », et ceux des opérations
+   sur titres (« Dividendes en actions: Achat 3 …@0 EUR », « Offre de souscription: Achat 100 …@10 EUR »), dont le
+   libellé est gardé (ost). Quantité et prix viennent du libellé ; le montant en euros, du mouvement lui-même quand il
+   est en euros. Avec les liens d'ISIN, les opérations faites sous un ancien ISIN sont rattachées au titre actuel ;
+   le changement d'ISIN lui-même n'est ni un achat ni une vente : il n'apparaît pas.
+   Quantité : groupes de milliers de trois chiffres (« 1 307 ») ; prix : le nombre entier après « @ », jusqu'à sa devise. */
+const Cst_ReOperation = /^(?:([^:@]{3,40}?)\s*:\s*)?(Achat|Vente|Buy|Sell)\s+(\d{1,3}(?:[\s\u00a0.]\d{3})*|\d+)\s+.*?@\s*(\d[\d\s\u00a0.,]*\d|\d)\s*(€|\$|£|[A-Z]{3})?(?=\s|\(|$)/i;
+function Fn_Operations(mouvements, isin, liens) {
+  const out = [], anciens = (liens || []).filter(l => l.vers === isin);
+  (mouvements || []).forEach(m => {
+    const herite = m.isin !== isin && anciens.some(l => l.de === m.isin && Fn_NomCourt(m.produit) === l.nomDe && m.date <= l.date);
+    if (m.isin !== isin && !herite) return;
+    const r = Cst_ReOperation.exec(m.desc || '');
+    if (!r || Cst_ReChangementIsin.test(m.desc)) return;
+    const qte = Fn_Nombre(r[3]), prix = Fn_Nombre(r[4]);
     if (qte == null || prix == null) return;
-    out.push({ date: m.date, type: /^(achat|buy)/i.test(r[1]) ? 'achat' : 'vente', qte, prix, dev: r[4] || m.dev, montant: m.montant, devMontant: m.dev });
+    out.push({ date: m.date, type: /^(achat|buy)/i.test(r[2]) ? 'achat' : 'vente', qte, prix, dev: r[5] || m.dev, montant: m.montant, devMontant: m.dev,
+      ost: r[1] ? r[1].trim() : '', herite });
   });
   return out.sort((a, b) => a.date < b.date ? -1 : 1);
 }
@@ -631,8 +670,16 @@ function Fn_Operations(mouvements, isin) {
    même nom (« ALSTOM » et « Alstom SA ») ne font pas un renommage ; un autre nom, si. */
 function Fn_NomCourt(n) {
   return String(n || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/\b([a-z])\.(?=[a-z]\b)/g, '$1')   // « S.E. », « N.V. », « S.p.A. » → se, nv, spa
     .replace(/\b(sa|se|nv|n\.v\.|ag|plc|inc|corp|corporation|ltd|limited|class [a-z]|cl [a-z]|s\.p\.a\.|spa|asa|oyj|ab)\b/g, ' ')
     .replace(/[^a-z0-9]+/g, ' ').trim();
+}
+// Même nom, mot à mot : « l air liquide » = « air liquide », mais « total » ≠ « totalenergies ».
+function Fn_MemeNom(a, b) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const A = a.split(' '), B = b.split(' '), dans = (x, y) => x.every(w => y.includes(w));
+  return dans(A, B) || dans(B, A);
 }
 function Fn_NomsSuccessifs(mouvements, isin, nomActuel) {
   const vus = {};
@@ -643,7 +690,24 @@ function Fn_NomsSuccessifs(mouvements, isin, nomActuel) {
     if (m.date < x.du) x.du = m.date; if (m.date > x.au) x.au = m.date;
   });
   const actuel = Fn_NomCourt(nomActuel);
-  return Object.keys(vus).filter(k => k && actuel && !(actuel.includes(k) || k.includes(actuel))).map(k => vus[k]).sort((a, b) => a.du < b.du ? -1 : 1);
+  return Object.keys(vus).filter(k => k && actuel && !Fn_MemeNom(k, actuel)).map(k => vus[k]).sort((a, b) => a.du < b.du ? -1 : 1);
+}
+/* ANCIENS NOMS d'un titre, de trois sources : (1) le relevé, quand il montre le même ISIN sous un autre nom ;
+   (2) un changement d'ISIN, quand l'ancien produit n'était pas temporaire (« non tradeable », droits…) ;
+   (3) Wikidata, dont le robot rapporte les noms officiels datés (wd : [{ nom, du, au }]) — DEGIRO, lui, réécrit
+   tout l'historique sous le nom actuel. Seuls comptent les noms portés depuis le premier mouvement du titre (depuis). */
+const Cst_ReProduitTemporaire = /non[- ]?tradeable|\bds\b|droits?|rights|nouvelles?|new shares|temporaire|temporary|\bdps\b|\bbsa\b/i;
+function Fn_AnciensNoms(mouvements, isin, nomActuel, liens, wd, depuis) {
+  const actuel = Fn_NomCourt(nomActuel), out = [], vus = new Set(actuel ? [actuel] : []);
+  const ajout = (nom, du, au, source) => {
+    const k = Fn_NomCourt(nom);
+    if (!k || [...vus].some(v => Fn_MemeNom(v, k))) return;
+    vus.add(k); out.push({ nom, du: du || null, au: au || null, source });
+  };
+  Fn_NomsSuccessifs(mouvements, isin, nomActuel).forEach(n => ajout(n.nom, n.du, n.au, 'relevé'));
+  (liens || []).filter(l => l.vers === isin && !Cst_ReProduitTemporaire.test(l.produitDe || '')).forEach(l => ajout(l.produitDe, null, l.date, 'changement d’ISIN'));
+  (wd || []).filter(n => !depuis || !n.au || n.au >= depuis).forEach(n => ajout(n.nom, n.du, n.au, 'Wikidata'));
+  return out;
 }
 /* OUTILS COMMUNS DES INDICATEURS (ctx.outils, voir indicateurs.js). fx : { USD: série BCE, GBP: …, … }. */
 function Fn_OutilsIndicateurs(ctx, fx) {
@@ -796,7 +860,8 @@ function Fn_Calculs() {
   const bilan = releve ? Fn_Bilan(mv.filter(x => x.date <= jour), Var_Etat.corrections, Fn_Taux(mv, Var_Etat.corrections)) : null;
   const somme = types => types.reduce((s, t) => s + (bilan.parType[t] ? bilan.parType[t].eur : 0), 0);
   const approx = types => types.some(t => bilan.parType[t] && (bilan.parType[t].approx || bilan.parType[t].sansTaux));
-  const tFrais = ['frais_courtage', 'frais_connexion', 'frais_change', 'frais'], tDiv = ['dividende', 'impot'];
+  // Coûts : frais du courtier ET taxes sur les transactions (TTF française, stamp duty britannique).
+  const tFrais = ['frais_courtage', 'frais_connexion', 'frais_change', 'taxe', 'frais'], tDiv = ['dividende', 'impot'];
   const frais = bilan ? somme(tFrais) : null, dividendes = bilan ? somme(tDiv) : null;
   return { c, titres, vl, cash: m.cash, plLat, plPct: investi > 0 ? plLat / investi * 100 : null, releve, verse,
     gain: verse != null && vl != null ? vl - verse : null, xirr, premier, horsEuro, frais, dividendes,
@@ -993,9 +1058,17 @@ function Fn_RendreTableau(c) {
     Var_Vue.isin = tr.dataset.isin; Fn_RendreCours(); $('c-cours').scrollIntoView({ behavior: 'smooth' });
   });
 }
-// « (anciennement X) » quand le relevé montre ce titre (même ISIN) sous un autre nom.
+// Liens d'ISIN du relevé, et anciens noms d'un titre : relevé, changements d'ISIN, Wikidata (rapporté par le robot).
+const Fn_Liens = () => Fn_LiensIsin(Fn_Mouvements());
+function Fn_Anciens(isin, nomActuel) {
+  const mv = Fn_Mouvements(), idx = Var_Cours.index, wd = (idx && idx.noms && idx.noms[isin]) || [];
+  let depuis = null; mv.forEach(m => { if (m.isin === isin && (!depuis || m.date < depuis)) depuis = m.date; });
+  // Sans relevé, Wikidata seul : les noms des dix dernières années.
+  return Fn_AnciensNoms(mv, isin, nomActuel, Fn_Liens(), wd, depuis || Fn_Jour(Date.now() - 3652 * 86400000));
+}
+// « (anciennement X) ».
 function Fn_HtmlAnciensNoms(p) {
-  const n = Fn_NomsSuccessifs(Fn_Mouvements(), p.isin, p.nom);
+  const n = Fn_Anciens(p.isin, p.nom);
   return n.length ? ' <span class="muet">(anciennement ' + n.map(x => Fn_Esc(x.nom)).join(', ') + ')</span>' : '';
 }
 
@@ -1007,7 +1080,7 @@ function Fn_RendreReleve() {
   const { horsEuro } = Fn_Flux(mv, Var_Etat.corrections);
   const imp = Var_Etat.releve.imports || [];
   const montants = dv => Object.keys(dv).sort((x, y) => x === 'EUR' ? -1 : y === 'EUR' ? 1 : x < y ? -1 : 1).map(d => Fmt_Dev(dv[d], d)).join('<br>');
-  const ordre = ['versement', 'retrait', 'dividende', 'impot', 'frais_courtage', 'frais_connexion', 'frais_change', 'frais', 'interet', 'achat', 'vente', 'regularisation', 'change', 'interne', 'autre'];
+  const ordre = ['versement', 'retrait', 'dividende', 'impot', 'frais_courtage', 'frais_connexion', 'frais_change', 'taxe', 'frais', 'interet', 'achat', 'vente', 'operation_titres', 'regularisation', 'change', 'interne', 'autre'];
   // En euros : sans objet pour le change et les transferts internes, qui se compensent d'une ligne à l'autre.
   const enEuros = t => (t === 'change' || t === 'interne') ? '—'
     : (b.parType[t].approx || b.parType[t].sansTaux ? '≈ ' : '') + Fmt_Eur(b.parType[t].eur, 2) + (b.parType[t].sansTaux ? ' <span class="muet">(' + b.parType[t].sansTaux + ' sans taux)</span>' : '');
@@ -1068,7 +1141,8 @@ $('f-releve').onchange = async e => {
     if (r.erreur) { bilans.push('<b>' + Fn_Esc(f.name) + '</b> : ' + Fn_Esc(r.erreur)); continue; }
     const fu = Fn_Fusionner(Fn_Mouvements(), r.mouvements);
     Var_Etat.releve = { mouvements: fu.tous, imports: ((Var_Etat.releve && Var_Etat.releve.imports) || []).concat([{ fichier: f.name, ts: Date.now(), lus: r.mouvements.length, ajoutes: fu.ajoutes }]) };
-    bilans.push('<b>' + Fn_Esc(f.name) + '</b> : ' + r.mouvements.length + ' mouvement(s) lu(s), ' + fu.ajoutes + ' nouveau(x)' + (r.rejets ? ', ' + r.rejets + ' ligne(s) sans date ou sans montant ignorée(s)' : ''));
+    bilans.push('<b>' + Fn_Esc(f.name) + '</b> : ' + r.mouvements.length + ' mouvement(s) lu(s), ' + fu.ajoutes + ' nouveau(x)' + (r.informatives ? ', ' + r.informatives + ' ligne(s) d’information sans montant (virements internes flatex…)' : '')
+      + (r.rejets ? ', ' + r.rejets + ' ligne(s) illisible(s) ignorée(s)' : ''));
   }
   Fn_Sauver();
   Fn_NoteReception(bilans.some(x => /colonnes|vide|illisible|Aucun/.test(x)) ? 'warn' : 'ok', 'Relevé — ' + bilans.join('<br>'));
@@ -1132,9 +1206,10 @@ const Cst_DevSymbole = { '€': 'EUR', '$': 'USD', '£': 'GBP' };
 
 // Titres pour le robot : ceux détenus (dernière capture) et ceux d'avant (achats et ventes du relevé), avec la date du premier achat.
 function Fn_ListeSymboles() {
-  const c = Fn_Derniere(), titres = {};
+  const c = Fn_Derniere(), titres = {}, remplaces = new Set(Fn_Liens().map(l => l.de));
   Fn_Mouvements().forEach(m => {
-    if (!/^[A-Z]{2}[A-Z0-9]{9}\d$/.test(m.isin || '')) return;
+    // Un ancien ISIN (temporaire, ou remplacé par un changement d'ISIN) n'est plus coté : rien à demander au robot.
+    if (!/^[A-Z]{2}[A-Z0-9]{9}\d$/.test(m.isin || '') || remplaces.has(m.isin)) return;
     const t = Fn_Classer(m, Var_Etat.corrections);
     if (t !== 'achat' && t !== 'vente') return;
     const op = Fn_Operations([m], m.isin)[0], dev = op ? (Cst_DevSymbole[op.dev] || op.dev) : m.dev;
@@ -1268,6 +1343,11 @@ function Fn_RendreCours() {
   else if (idx) etat = 'Cours du ' + Fmt_DateHeure(Date.parse(idx.maj)) + ' (robot) · ' + (idx.series || []).length + ' séries'
     + ((idx.introuvables || []).length ? ' · ' + idx.introuvables.length + ' titre(s) introuvable(s), voir les réglages' : '');
   else etat = 'Aucun cours pour l’instant.';
+  // Compte rendu du dernier passage du téléphone (macro « Smart - cours »), repris par le robot.
+  const tel = idx && idx.telephone;
+  if (tel) etat += ' · téléphone : ' + tel.ok + ' cours reçu(s)' + (tel.ko ? ', ' + tel.ko + ' échec(s) chez Yahoo' : '') + (tel.refus ? ', ' + tel.refus + ' dépôt(s) refusé(s)' : '')
+    + (tel.fin ? ' (' + tel.fin + ')' : '');
+  if (idx && idx.illisibles) etat += ' · ' + idx.illisibles + ' réponse(s) illisible(s)';
   if (idx && idx.alerte) etat += ' — ' + idx.alerte;
   if (Var_Cours.erreur) etat += ' — ' + Var_Cours.erreur;
   $('cours-etat').textContent = etat;
@@ -1286,7 +1366,7 @@ function Fn_RendreCours() {
   document.querySelectorAll('#b-resolution button').forEach(b => b.onclick = () => { if (!b.disabled) { Var_Vue.resolution = b.dataset.r; Fn_RendreCours(); } });
   const pos = c.positions.find(p => p.isin === Var_Vue.isin) || null;
   const pts = Var_Vue.isin ? Fn_PointsCours(Var_Vue.isin, Var_Vue.periode, Var_Vue.resolution) : null;
-  const ops = Var_Vue.resolution === 'jour' ? Fn_Operations(Fn_Mouvements(), Var_Vue.isin) : [];
+  const ops = Var_Vue.resolution === 'jour' ? Fn_Operations(Fn_Mouvements(), Var_Vue.isin, Fn_Liens()) : [];
   Fn_GrapheCours(pts, pos, ops);
   Fn_RendreStatsCours(pts, pos, ops);
   Fn_RendreReglagesCours();
@@ -1337,7 +1417,7 @@ function Fn_GrapheCours(pts, pos, ops) {
     pt.setAttribute('cx', X(i)); pt.setAttribute('cy', Y(pts[i].v)); pt.setAttribute('visibility', 'visible');
     const var0 = (pts[i].v / pts[0].v - 1) * 100, op = visibles.filter(o => o.date === pts[i].jour);
     bulle.montrer('<b>' + Fn_Esc(pts[i].etiquette) + '</b><br>' + fmt(pts[i].v) + ' ' + Fn_Esc(dev) + ' · ' + Fmt_Pct(var0, 1, true) + ' sur la période'
-      + op.map(o => '<br>' + (o.type === 'achat' ? '▲ achat ' : '▼ vente ') + Fmt_Nb(o.qte, 0) + ' à ' + fmt(o.prix)).join(''), X(i), Y(pts[i].v), Y(pts[i].v));
+      + op.map(o => '<br>' + (o.type === 'achat' ? '▲ achat ' : '▼ vente ') + Fmt_Nb(o.qte, 0) + ' à ' + fmt(o.prix) + (o.ost ? ' (' + Fn_Esc(o.ost) + ')' : '')).join(''), X(i), Y(pts[i].v), Y(pts[i].v));
   };
   cible.addEventListener('pointermove', suivre); cible.addEventListener('pointerdown', suivre);
   cible.addEventListener('pointerleave', () => { bulle.cacher(); ret.setAttribute('visibility', 'hidden'); pt.setAttribute('visibility', 'hidden'); });
@@ -1349,8 +1429,8 @@ function Fn_RendreStatsCours(pts, pos, ops) {
   const vol = Var_Vue.resolution === 'jour' && v.length > 20 ? Fn_Volatilite(Fn_Rendements(v)) : null;
   const tuile = (lib, val, cls) => '<div class="tuile"><div class="lib">' + lib + '</div><div class="val ' + (cls || '') + '" style="font-size:16px">' + val + '</div></div>';
   const isin = Var_Vue.isin, nomActuel = pos ? pos.nom : ((Fn_ListeSymboles().titres.find(t => t.isin === isin) || {}).nom || '');
-  const anciens = Fn_NomsSuccessifs(Fn_Mouvements(), isin, nomActuel);
-  const toutesOps = Fn_Operations(Fn_Mouvements(), isin);
+  const anciens = Fn_Anciens(isin, nomActuel);
+  const toutesOps = Fn_Operations(Fn_Mouvements(), isin, Fn_Liens());
   const corr = Var_Cours.index && ((Var_Cours.index.series || []).find(s => s.id === isin) || {}).symbole;
   $('cours-stats').innerHTML = '<div class="tuiles" style="margin-top:8px">'
     + tuile('Sur la période', Fmt_Pct(variation, 1, true), Cls_Signe(variation))
@@ -1360,16 +1440,17 @@ function Fn_RendreStatsCours(pts, pos, ops) {
     + (vol != null ? tuile('Volatilité annualisée', Fmt_Pct(vol * 100, 1)) : '')
     + '</div><div class="muet" style="margin-top:6px">' + (pos && pos.pru && (pos.pru < bas * 0.7 || pos.pru > haut * 1.3) ? 'PRU ' + Fmt_Nb(pos.pru, 3) + ', hors du graphique · ' : '')
     + 'ISIN ' + Fn_Esc(isin) + (corr ? ' · Yahoo ' + Fn_Esc(corr) : '')
-    + (anciens.length ? ' · anciens noms : ' + anciens.map(a => Fn_Esc(a.nom) + ' (' + Fmt_Jour(a.du) + ' → ' + Fmt_Jour(a.au) + ')').join(', ') : '') + '</div>'
-    + (toutesOps.length ? '<details><summary>' + toutesOps.length + ' achat(s) et vente(s) dans le relevé</summary><div class="defile"><table><thead><tr><th>Date</th><th>Opération</th><th>Qté</th><th>Prix</th></tr></thead><tbody>'
-      + toutesOps.slice().reverse().map(o => '<tr><td>' + Fmt_Jour(o.date) + '</td><td>' + (o.type === 'achat' ? '▲ achat' : '▼ vente') + '</td><td>' + Fmt_Nb(o.qte, 0) + '</td><td>' + Fmt_Nb(o.prix, 3) + ' ' + Fn_Esc(Cst_DevSymbole[o.dev] || o.dev) + '</td></tr>').join('')
+    + (anciens.length ? ' · anciens noms : ' + anciens.map(a => Fn_Esc(a.nom) + (a.du || a.au ? ' (' + (a.du ? Fmt_Jour(a.du) : '…') + ' → ' + (a.au ? Fmt_Jour(a.au) : '…') + ')' : '') + ' <span title="source">· ' + Fn_Esc(a.source) + '</span>').join(', ') : '') + '</div>'
+    + (toutesOps.length ? '<details><summary>' + toutesOps.length + ' achat(s) et vente(s) dans le relevé' + (toutesOps.some(o => o.ost) ? ', opérations sur titres comprises' : '') + '</summary><div class="defile"><table><thead><tr><th>Date</th><th>Opération</th><th>Qté</th><th>Prix</th></tr></thead><tbody>'
+      + toutesOps.slice().reverse().map(o => '<tr><td>' + Fmt_Jour(o.date) + '</td><td>' + (o.type === 'achat' ? '▲ achat' : '▼ vente') + (o.ost ? '<div class="muet">' + Fn_Esc(o.ost) + (o.herite ? ' (ancien ISIN)' : '') + '</div>' : '') + '</td><td>' + Fmt_Nb(o.qte, 0) + '</td><td>' + Fmt_Nb(o.prix, 3) + ' ' + Fn_Esc(Cst_DevSymbole[o.dev] || o.dev) + '</td></tr>').join('')
       + '</tbody></table></div></details>' : '');
 }
 function Fn_RendreReglagesCours() {
   const jeton = Lire_Local(Cst_CleJeton), r = Fn_Reglages(), idx = Var_Cours.index;
-  $('r-cours').innerHTML = '<div class="muet">Les cours viennent d’un robot qui tourne chaque soir de semaine sur GitHub (dépôt privé <b>' + Fn_Esc(r.depot) + '</b>) : '
-    + 'clôtures quotidiennes depuis le premier achat, cours à la minute des 5 derniers jours, change de la BCE. Il lui faut la liste de vos titres, '
-    + 'que cette page lui envoie ; pour cela, une <b>clé d’accès GitHub</b> limitée à ce seul dépôt :</div>'
+  $('r-cours').innerHTML = '<div class="muet">Chaque soir à 22 h 30, le <b>téléphone</b> (macro « Smart - cours ») télécharge les cours chez Yahoo Finance — '
+    + 'clôtures quotidiennes depuis le premier achat, cours à la minute des 7 derniers jours — et les dépose dans le dépôt privé <b>' + Fn_Esc(r.depot) + '</b>, '
+    + 'où un robot GitHub les range, ajoute le change de la BCE et les anciens noms des titres (Wikidata). Il lui faut la liste de vos titres, '
+    + 'que cette page lui envoie ; pour cela, une <b>clé d’accès GitHub</b> limitée à ce seul dépôt (la même sert une fois à la macro) :</div>'
     + '<ol class="muet" style="margin:6px 0 6px 18px;padding:0"><li>github.com → photo de profil → <b>Settings</b> → <b>Developer settings</b> → <b>Personal access tokens</b> → <b>Fine-grained tokens</b> → <b>Generate new token</b> ;</li>'
     + '<li>nom « Portefeuille », expiration 1 an ; <b>Repository access</b> : <i>Only select repositories</i> → <b>' + Fn_Esc(r.depot.split('/')[1]) + '</b> ;</li>'
     + '<li><b>Permissions</b> → <b>Contents</b> : <i>Read and write</i> ; <b>Generate token</b>, copiez-la et collez-la ici.</li></ol>'
@@ -1434,7 +1515,7 @@ function Fn_DonneesAnalyse(k) {
     positions: c.positions.slice().sort((a, b) => b.valeur - a.valeur).map(p => {
       const s = Fn_Serie(p.isin), un = s ? s.clotures.slice(Math.max(0, Fn_RangAu(s.jours, ilYa(365)))) : null;
       const haut = un && un.length ? Math.max(...un) : null, mm = s && s.clotures.length >= 200 ? Fn_Moyenne(s.clotures.slice(-200)) : null;
-      const anciens = Fn_NomsSuccessifs(Fn_Mouvements(), p.isin, p.nom).map(a => a.nom);
+      const anciens = Fn_Anciens(p.isin, p.nom).map(a => a.nom);
       return { nom: p.nom, ticker: p.ticker, isin: p.isin, pays: p.isin.slice(0, 2), devise: p.dev, poids_pct: r1(p.valeur / tot * 100), valeur_eur: Math.round(p.valeur),
         plus_value_pct: r1(p.plPct), cours: p.cours, pru: p.pru,
         perf_1_mois_pct: r1(Fn_PerformanceSerie(s, ilYa(31))), perf_1_an_pct: r1(Fn_PerformanceSerie(s, ilYa(365))),
