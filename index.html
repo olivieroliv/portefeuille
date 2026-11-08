@@ -97,6 +97,11 @@ input[type="number"], input[type="text"], input[type="password"] { font: inherit
 input[type="number"] { width: 70px; }
 .reglage { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0; font-size: 13px; }
 .rapport h3 { font-size: 14.5px; margin: 12px 0 4px; }
+.md { font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.md h1, .md h2 { font-size: 16px; margin: 16px 0 6px; } .md h3, .md h4 { font-size: 14.5px; margin: 12px 0 4px; }
+.md p { margin: 6px 0; } .md ul, .md ol { margin: 4px 0; padding-left: 20px; } .md li { margin: 2px 0; }
+.md th, .md td { text-align: left; font-size: 12.5px; overflow-wrap: normal; min-width: 76px; } .md hr { border: 0; border-top: 1px solid var(--grille); margin: 12px 0; }
+.md blockquote { margin: 6px 0; padding-left: 10px; border-left: 3px solid var(--grille); color: var(--encre-2); }
 .rapport p { margin: 4px 0; }
 .rapport .item { padding: 6px 0; border-bottom: 1px solid var(--grille); }
 .badge { display: inline-block; font-size: 11.5px; font-weight: 600; padding: 1px 6px; border-radius: 6px; background: var(--surface-2); color: var(--encre-2); margin-right: 6px; }
@@ -188,11 +193,14 @@ select { max-width: 100%; }
 
   <section class="carte" id="c-analyse">
     <h2>Analyse par Claude</h2>
-    <div class="rang"><button class="accent" id="b-analyse-app">Analyse complète dans l’app Claude</button></div>
-    <div class="muet">Sans coût d’API : comprise dans votre abonnement Claude. Claude y cherche lui-même, ligne par ligne, les résultats, la valorisation,
-      l’avis des analystes et l’actualité (AFP, Reuters, sites d’analyse financière) — pas d’analyse technique. La demande (vos chiffres, sans nom
-      ni numéro de compte) est copiée et Claude s’ouvre : collez, envoyez.</div>
+    <div class="rang"><button class="accent" id="b-analyse-robot">Analyse complète par Claude</button></div>
+    <div class="muet">Sur votre abonnement Claude, sans coût d’API. Claude travaille seul, sur GitHub (5 à 20 minutes) : il cherche, ligne par ligne,
+      les résultats, la valorisation, l’avis des analystes et l’actualité (AFP, Reuters, sites d’analyse financière) — pas d’analyse technique —
+      et le rapport s’affiche ici. Vos chiffres (sans nom ni numéro de compte) passent par votre dépôt GitHub privé.
+      <a href="#" id="b-analyse-app">Ou copier la demande pour l’app Claude</a>.</div>
+    <div id="analyse-robot-etat"></div>
     <div id="analyse-app"></div>
+    <div id="analyse-robot" class="md"></div>
     <div class="muet" style="margin-top:12px">Ou, rangée dans cette page, l’analyse par la clé API de Vigie (payante : le coût estimé s’affiche avant).
       Rien n’est envoyé sans votre appui. Ce n’est pas un conseil en investissement.</div>
     <div id="analyse-cle"></div>
@@ -2053,7 +2061,7 @@ function Fn_ConsignesAnalyse(web) {
 /* ANALYSE COMPLÈTE DANS L'APP CLAUDE : une demande autonome (consignes + chiffres) copiée dans le presse-papier, puis Claude
    s'ouvre. Claude y fait lui-même ses recherches sur le web, dans le cadre de l'abonnement : rien n'est facturé sur la clé API.
    Fondamentaux et actualité seulement : l'analyse technique est écartée. */
-function Fn_DemandeApp(k) {
+function Fn_DemandeApp(k, sansTete) {
   const d = Fn_DonneesAnalyse(k);
   return [
     'Tu es analyste financier indépendant. Fais une revue COMPLÈTE de mon portefeuille d’actions, fondée sur les fondamentaux des sociétés et sur l’actualité. '
@@ -2095,7 +2103,8 @@ function Fn_DemandeApp(k) {
       + 'a) synthèse en cinq à huit lignes ;\nb) alertes, de la plus importante à la moins importante ;\n'
       + 'c) tableau : ligne · poids · plus-value · valorisation · consensus · ton avis ;\nd) les fiches ;\ne) le portefeuille entier, puis les idées nouvelles ;\n'
       + 'f) calendrier des trois prochains mois : résultats, assemblées générales, détachements de dividende ;\ng) sources : titre, site, date, lien.\n'
-      + 'Si tout ne tient pas dans une réponse, arrête-toi après une fiche complète et termine par : « Écris “continue” pour la suite. »',
+      + (sansTete ? 'Rédige le rapport complet en une seule réponse, en Markdown (titres ##, listes, tableaux) : personne ne pourra te demander la suite.'
+        : 'Si tout ne tient pas dans une réponse, arrête-toi après une fiche complète et termine par : « Écris “continue” pour la suite. »'),
     '6. RÈGLES : chaque chiffre et chaque fait avec sa source et sa date ; des informations récentes, et signale celles qui datent ; '
       + 'sépare les faits, l’avis des analystes et ton propre avis ; si une information manque ou si les sources se contredisent, dis-le, n’invente rien ; '
       + 'français simple, termes techniques expliqués en quelques mots (PER, VE/EBITDA…) ; la décision m’appartient : tes avis ne sont ni des ordres '
@@ -2120,6 +2129,60 @@ async function Fn_AnalyseApp() {
       : 'Le navigateur a refusé la copie : copiez le texte ci-dessous (appui long → Tout sélectionner → Copier).')
     + ' <a href="' + Cst_UrlClaude + '" target="_blank" rel="noopener noreferrer">Ouvrir Claude ↗</a></div>'
     + '<details' + (copie ? '' : ' open') + '><summary>Voir la demande</summary><textarea readonly rows="10">' + Fn_Esc(texte) + '</textarea></details>';
+}
+/* ANALYSE COMPLÈTE PAR CLAUDE, SANS TÊTE : la page dépose la demande (consignes + chiffres) sur la branche « analyses » du
+   dépôt privé et lance le robot « Analyse » (Claude Code en mode -p, sur l'abonnement Claude de l'utilisateur : voir le
+   dépôt portefeuille-cours). Le rapport, en Markdown, revient sur la même branche : la page le cherche toutes les minutes
+   tant qu'il est attendu, et au chargement suivant si elle a été fermée entre-temps. Affiché après nettoyage (DOMPurify). */
+const Cst_Marked = 'https://cdn.jsdelivr.net/npm/marked@12.0.2/+esm', Cst_Purify = 'https://cdn.jsdelivr.net/npm/dompurify@3.1.6/+esm';
+const Cst_AttenteMaxMin = 55;   // le robot s'arrête de lui-même au bout de 50 min
+let Var_AttenteRobot = null;
+async function Fn_LancerAnalyseRobot() {
+  const etat = $('analyse-robot-etat'), a = Var_Etat.analyseRobot || {};
+  if (!Lire_Local(Cst_CleJeton)) { etat.innerHTML = '<div class="note note-warn">Il faut d’abord l’accès GitHub (carte « Cours », Réglages) : c’est lui qui porte la demande au robot.</div>'; return; }
+  if (a.attendu && Date.now() - a.attendu < Cst_AttenteMaxMin * 60000) { Fn_SuivreAnalyseRobot(); return; }
+  const ts = Date.now(), texte = Fn_DemandeApp(Fn_Calculs(), true);
+  etat.innerHTML = '<div class="note">Envoi de la demande…</div>';
+  try {
+    const actuel = await Fn_Gh('contents/demande.json?ref=analyses');
+    const sha = actuel ? (await actuel.json()).sha : undefined;
+    await Fn_Gh('contents/demande.json', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'Demande d’analyse', branch: 'analyses', sha, content: Fn_Base64(JSON.stringify({ ts, modele: Fn_Reglages().modele, texte })) }) });
+    await Fn_Gh('dispatches', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ event_type: 'analyse' }) });
+  } catch (e) { etat.innerHTML = '<div class="note note-crit">Demande non envoyée : ' + Fn_Esc(e.message) + '</div>'; return; }
+  Var_Etat.analyseRobot = Object.assign(a, { attendu: ts, perdu: false }); Fn_Sauver();
+  Var_AttenteRobot = setTimeout(Fn_SuivreAnalyseRobot, 60000);
+  Fn_RendreAnalyseRobot();
+}
+async function Fn_SuivreAnalyseRobot() {
+  clearTimeout(Var_AttenteRobot);
+  const a = Var_Etat.analyseRobot;
+  if (!a || !a.attendu) return;
+  let r = null;
+  try { r = await Fn_GhFichier('resultat.json', 'analyses'); } catch (e) { r = null; }
+  if (r && r.ts_demande === a.attendu) {
+    a.attendu = null; a.derniers = [r].concat((a.derniers || []).filter(x => x.ts_demande !== r.ts_demande)).slice(0, 2);
+  } else if (Date.now() - a.attendu > Cst_AttenteMaxMin * 60000) { a.attendu = null; a.perdu = true; }
+  else Var_AttenteRobot = setTimeout(Fn_SuivreAnalyseRobot, 60000);
+  Fn_Sauver(); Fn_RendreAnalyseRobot();
+}
+async function Fn_RendreAnalyseRobot() {
+  const a = Var_Etat.analyseRobot || {}, etat = $('analyse-robot-etat'), zone = $('analyse-robot');
+  etat.innerHTML = a.attendu ? '<div class="note">Analyse en cours depuis ' + Fmt_DateHeure(a.attendu) + ' : Claude cherche et rédige (5 à 20 minutes). '
+      + 'Le rapport s’affichera ici ; vous pouvez fermer la page en attendant.<div class="rang"><button id="b-analyse-verifier">Vérifier maintenant</button></div></div>'
+    : a.perdu ? '<div class="note note-warn">Le robot n’a pas répondu. Voir l’onglet « Actions » du dépôt portefeuille-cours sur GitHub, puis relancer.</div>' : '';
+  if ($('b-analyse-verifier')) $('b-analyse-verifier').onclick = Fn_SuivreAnalyseRobot;
+  const r = (a.derniers || [])[0];
+  if (!r) { zone.innerHTML = ''; return; }
+  const entete = '<div class="muet" style="margin-top:8px">Analyse complète du ' + Fmt_DateHeure(r.ts_demande) + ' · '
+    + Fn_Esc((Cst_Modeles[r.modele] || { nom: r.modele }).nom) + ' · ' + Math.max(1, Math.round(r.duree_s / 60)) + ' min · sur votre abonnement Claude</div>';
+  if (!r.ok) { zone.innerHTML = entete + '<div class="note note-crit">Analyse impossible : ' + Fn_Esc(r.erreur) + '</div>'; return; }
+  let html;
+  try { const [m, p] = await Promise.all([import(Cst_Marked), import(Cst_Purify)]); html = p.default.sanitize(m.marked.parse(r.texte), { FORBID_TAGS: ['img', 'form', 'input', 'button', 'style'] }); }
+  catch (e) { html = '<div style="white-space:pre-wrap">' + Fn_Esc(r.texte) + '</div>'; }   // modules injoignables : texte brut
+  zone.innerHTML = entete + html;
+  zone.querySelectorAll('a[href]').forEach(l => { l.target = '_blank'; l.rel = 'noopener noreferrer'; });
+  zone.querySelectorAll('table').forEach(t => { const d = document.createElement('div'); d.className = 'defile'; t.replaceWith(d); d.appendChild(t); });
 }
 function Fn_EstimationAnalyse(web, m) {
   const p = Cst_Modeles[m], entree = (Fn_ConsignesAnalyse(web).length + JSON.stringify(Fn_DonneesAnalyse(Fn_Calculs())).length + 3000) / 3;
@@ -2197,7 +2260,9 @@ function Fn_RendreAnalyse() {
     : '<div class="note note-warn">Aucune clé API dans ce navigateur. Saisissez-la dans Vigie (Paramètres → Accès API) ou ici : les deux pages partagent la même.'
       + '<div class="reglage"><input type="password" id="i-cle" placeholder="sk-ant-…" autocomplete="off" style="flex:1;min-width:180px"><button id="b-cle">Enregistrer</button></div></div>';
   if ($('b-cle')) $('b-cle').onclick = () => { const v = $('i-cle').value.trim(); if (v) { Ecrire_Local(Cst_CleApi, v); Fn_RendreAnalyse(); } };
-  $('b-analyse-app').onclick = Fn_AnalyseApp;
+  $('b-analyse-app').onclick = e => { e.preventDefault(); Fn_AnalyseApp(); };
+  $('b-analyse-robot').onclick = Fn_LancerAnalyseRobot;
+  Fn_RendreAnalyseRobot();
   $('b-analyse-rapide').onclick = () => Fn_DemanderAnalyse(false);
   $('b-analyse-web').onclick = () => Fn_DemanderAnalyse(true);
   const a = (Var_Etat.analyses || [])[0];
@@ -2220,7 +2285,7 @@ function Fn_RendreAnalyse() {
   $('s-effort').onchange = e => { Var_Etat.reglages = Object.assign(Var_Etat.reglages || {}, { effort: e.target.value }); Fn_Sauver(); };
 }
 
-Fn_Theme(); Fn_Rendre(); Fn_ReceptionAuto(); Fn_ChargerCours(false);
+Fn_Theme(); Fn_Rendre(); Fn_ReceptionAuto(); Fn_ChargerCours(false); Fn_SuivreAnalyseRobot();
 </script>
 </body>
 </html>
