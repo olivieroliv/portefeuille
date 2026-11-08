@@ -709,6 +709,33 @@ function Fn_AnciensNoms(mouvements, isin, nomActuel, liens, wd, depuis) {
   (wd || []).filter(n => !depuis || !n.au || n.au >= depuis).forEach(n => ajout(n.nom, n.du, n.au, 'Wikidata'));
   return out;
 }
+/* VERSEMENT OU RETRAIT PROBABLE entre deux captures. La macro ne lit pas le relevé de compte, et l'écran
+   « Transactions » de DEGIRO ne montre que les achats et les ventes. Mais l'argent disponible le trahit : entre deux
+   captures, sa variation doit s'expliquer par les achats et les ventes (variation des quantités × prix moyen des deux
+   captures). Ce qui reste au-delà d'une marge (300 € + 3 % des montants échangés : écarts de prix, frais, petits
+   dividendes) est un versement (> 0) ou un retrait (< 0) — sauf s'il figure déjà dans le relevé importé. */
+function Fn_VersementsProbables(captures, mouvements, corrections) {
+  const out = [], caps = (captures || []).filter(c => c.positions && c.marge && c.marge.cash != null);
+  for (let i = 1; i < caps.length; i++) {
+    const a = caps[i - 1], b = caps[i];
+    if (a.positions.concat(b.positions).some(p => p.qte == null || !(p.valeur >= 0))) continue;   // quantité illisible : pas de conclusion
+    const lignes = {};
+    a.positions.forEach(p => { lignes[p.isin] = { qa: p.qte, va: p.valeur, qb: 0, vb: 0 }; });
+    b.positions.forEach(p => { const x = lignes[p.isin] = lignes[p.isin] || { qa: 0, va: 0, qb: 0, vb: 0 }; x.qb = p.qte; x.vb = p.valeur; });
+    let achats = 0, volume = 0;
+    Object.values(lignes).forEach(x => {
+      const dq = x.qb - x.qa; if (!dq) return;
+      const pa = x.qa ? x.va / x.qa : null, pb = x.qb ? x.vb / x.qb : null;
+      const prix = pa != null && pb != null ? (pa + pb) / 2 : (pb != null ? pb : pa);
+      achats += dq * prix; volume += Math.abs(dq * prix);
+    });
+    const ecart = b.marge.cash - a.marge.cash + achats, marge = 300 + 0.03 * volume;
+    const du = Fn_Jour(a.ts), au = Fn_Jour(b.ts);
+    const connus = Fn_Flux(mouvements, corrections).flux.filter(f => f.date > du && f.date <= au).reduce((s, f) => s + f.montant, 0);
+    if (Math.abs(ecart - connus) > marge) out.push({ du, au, montant: ecart - connus });
+  }
+  return out;
+}
 /* OUTILS COMMUNS DES INDICATEURS (ctx.outils, voir indicateurs.js). fx : { USD: série BCE, GBP: …, … }. */
 function Fn_OutilsIndicateurs(ctx, fx) {
   const valeur = depuis => Fn_ValeurPortefeuilleActuel(ctx.positions, ctx.cours.serie, fx, depuis);
@@ -814,8 +841,16 @@ function Fn_Alertes(c) {
 function Fn_BilanReception(r) {
   if (!r.ok) { Fn_NoteReception('crit', '<b>Capture non intégrée.</b> ' + Fn_Esc(r.message)); return; }
   const a = Fn_Alertes(r.cap);
-  Fn_NoteReception(a.length ? 'warn' : 'ok', '<b>Capture du ' + Fn_Esc(Fmt_DateHeure(r.cap.ts)) + ' intégrée</b> — ' + r.cap.controle.lues + ' position(s)'
-    + (a.length ? '. À vérifier : ' + Fn_Esc(a.join(' ; ')) + '.' : ', somme des lignes = valeur des titres de l’écran.'));
+  const v = Fn_VersementsProbables(Var_Etat.captures, Fn_Mouvements(), Var_Etat.corrections).filter(x => x.au === Fn_Jour(r.cap.ts));
+  Fn_NoteReception(a.length || v.length ? 'warn' : 'ok', '<b>Capture du ' + Fn_Esc(Fmt_DateHeure(r.cap.ts)) + ' intégrée</b> — ' + r.cap.controle.lues + ' position(s)'
+    + (a.length ? '. À vérifier : ' + Fn_Esc(a.join(' ; ')) + '.' : ', somme des lignes = valeur des titres de l’écran.')
+    + v.map(x => '<br>' + Fn_HtmlVersement(x)).join(''));
+}
+// Versement ou retrait deviné entre deux captures (voir Fn_VersementsProbables).
+function Fn_HtmlVersement(v) {
+  return 'Entre le ' + Fmt_Jour(v.du) + ' et le ' + Fmt_Jour(v.au) + ', environ <b>' + Fmt_Signe(v.montant) + '</b> ' + (v.montant > 0 ? 'sont arrivés' : 'sont partis')
+    + ' sans achat ni vente : sans doute un ' + (v.montant > 0 ? 'versement (ou un gros dividende)' : 'retrait')
+    + '. Importez un relevé récent (CSV) : sinon le XIRR et le gain total n’en tiennent pas compte.';
 }
 async function Fn_ReceptionAuto() {
   if (!/[?&]capture=/.test(location.search)) return;
@@ -1090,6 +1125,7 @@ function Fn_RendreReleve() {
     + (imp.length ? ' · dernier import le ' + Fmt_Date(imp[imp.length - 1].ts) + ' (' + Fn_Esc(imp[imp.length - 1].fichier) + ', ' + imp[imp.length - 1].ajoutes + ' nouveau(x))' : '') + '.</div>'
     + (vieux ? '<div class="muet">Si vous avez versé ou retiré de l’argent depuis le ' + Fmt_Date(imp[imp.length - 1].ts) + ', importez un relevé récent : sinon le XIRR et le gain total n’en tiennent pas compte.</div>' : '')
     + (horsEuro.length ? '<div class="note note-warn">' + horsEuro.length + ' versement(s) ou retrait(s) dans une autre devise que l’euro ne sont pas comptés dans le XIRR.</div>' : '')
+    + Fn_VersementsProbables(Var_Etat.captures, mv, Var_Etat.corrections).map(v => '<div class="note note-warn">' + Fn_HtmlVersement(v) + '</div>').join('')
     + '<h2 style="margin-top:10px">Bilan du compte</h2><div class="defile"><table><thead><tr><th>Type</th><th>Nb</th><th>Montant</th><th>En euros</th></tr></thead><tbody>'
     + ordre.filter(t => b.parType[t]).map(t => '<tr><td>' + Fn_Esc(Cst_Types[t]) + '</td><td>' + b.parType[t].nb + '</td><td>' + montants(b.parType[t].devises) + '</td><td>' + enEuros(t) + '</td></tr>').join('')
     + '</tbody></table></div><div class="muet">« En euros » : un montant en devise est converti au taux de l’opération de change du relevé la plus proche '
