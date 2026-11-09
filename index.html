@@ -1179,7 +1179,7 @@ function Fn_Historique() {
   if (!mv.length || !nb) return null;
   Fn_LignesMemo();
   const cle = Var_Memo.lignesCle + '|' + Var_Cours.sha + '|' + nb + '|' + Fn_Jour(Date.now());
-  if (Var_Memo.histCle !== cle) { Var_Memo.histCle = cle; Var_Memo.hist = Fn_ValeurHistorique(mv, Var_Etat.corrections, Fn_Liens(), Fn_Serie, Fn_Fx()); }
+  if (Var_Memo.histCle !== cle) { Var_Memo.histCle = cle; Var_Memo.hist = Fn_ValeurHistorique(mv, Var_Etat.corrections, Fn_Liens(), id => Fn_CoursEpoque(Fn_Serie(id)), Fn_Fx()); }
   return Var_Memo.hist;
 }
 function Fn_GrapheEvolutionHisto(hist) {
@@ -1572,6 +1572,33 @@ async function Fn_ChargerCours(forcer) {
   finally { Var_Cours.enCours = false; Fn_Rendre(); }
 }
 const Fn_Serie = id => { const s = Var_Cours.series[id]; return s && s.jours && s.jours.length ? s : null; };
+/* COURS D'ÉPOQUE. Après une division ou une distribution d'actions gratuites (rapport r : 1,1 pour « 1 gratuite pour 10 »),
+   Yahoo abaisse TOUS les cours d'avant pour que sa courbe reste continue. Or le relevé compte les actions réellement détenues
+   ce jour-là, gratuites reçues seulement à leur date. Le cours d'époque d'un jour = cours Yahoo × produit des r des événements
+   POSTÉRIEURS à ce jour — vérifié sur un achat d'Air Liquide : 146,10 € payés, 109,56 € chez Yahoo, 145,82 € remis à niveau.
+   Calculé à l'affichage seulement (les données enregistrées restent celles de Yahoo), pour la valeur du compte, les écarts au
+   PRU et la courbe du cours ; les performances gardent le cours Yahoo, juste pour elles. Sans événement, rien ne change. */
+const Var_Epoque = new WeakMap();
+function Fn_CoursEpoque(s) {
+  if (!s || !(s.divisions || []).length) return s;
+  if (!Var_Epoque.has(s)) Var_Epoque.set(s, Object.assign({}, s, {
+    clotures: s.jours.map((j, i) => s.clotures[i] * s.divisions.filter(d => d.j > j && d.r > 0).reduce((p, d) => p * d.r, 1)) }));
+  return Var_Epoque.get(s);
+}
+// Libellé d'un événement : « 1 action gratuite pour 10 », « division : 1 action devient 5 », « regroupement : 15 actions en 1 ».
+const Fn_LibDivision = r => r > 1 && r < 2 ? '1 action gratuite pour ' + Math.round(1 / (r - 1)) : r >= 2 ? 'division : 1 action devient ' + Fmt_Nb(r, 2) : 'regroupement : ' + Fmt_Nb(1 / r, 2) + ' actions en 1';
+/* Les événements de Yahoo confrontés au relevé : pendant la détention (quantité > 0 la veille), chacun doit y apparaître sous
+   forme d'opération sur titres (« Dividendes en actions : Achat 2 … @0 », division, regroupement) à trois jours près. Un
+   événement absent du relevé n'est pas deviné : il est signalé. Avant ou après la détention : sans effet sur vos chiffres. */
+function Fn_ControleDivisions(isin, ligne) {
+  const s = Fn_Serie(isin), vus = [], manquants = [];
+  ((s && s.divisions) || []).forEach(d => {
+    const t = Date.parse(d.j + 'T12:00:00'), e = ligne ? Fn_EtatAu(ligne, Fn_Jour(t - 86400000)) : null;
+    if (!e || !e.qte) return;
+    (ligne.ops.some(o => o.ost && Math.abs(Date.parse(o.date + 'T12:00:00') - t) <= 3 * 86400000) ? vus : manquants).push(d);
+  });
+  return { vus, manquants };
+}
 const Fn_Fx = () => { const fx = {}; Object.keys(Var_Cours.series).forEach(id => { if (/^FX-/.test(id) && Var_Cours.series[id]) fx[id.slice(3)] = Var_Cours.series[id]; }); return fx; };
 
 /* ---------- indicateurs ---------- */
@@ -1628,7 +1655,8 @@ function Fn_RendreIndicateurs(k) {
 /* ---------- cours par action ---------- */
 const Cst_Periodes = [['1J', '1 jour', 2], ['5J', '5 jours', 7], ['1M', '1 mois', 31], ['3M', '3 mois', 92], ['6M', '6 mois', 183], ['1A', '1 an', 365], ['3A', '3 ans', 1096], ['5A', '5 ans', 1827], ['MAX', 'Tout', null]];
 const Fmt_Heure = (ts, decal) => { const d = new Date((ts + (decal || 0)) * 1000); return String(d.getUTCDate()).padStart(2, '0') + '/' + String(d.getUTCMonth() + 1).padStart(2, '0') + ' ' + String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0'); };
-// Points du graphique : { etiquette, v, jour } — à la minute (5 derniers jours) ou à la clôture quotidienne.
+// Points du graphique : { etiquette, v, va, jour } — à la minute (5 derniers jours) ou à la clôture quotidienne. v : cours
+// d'époque (ce que l'on payait ce jour-là) ; va : cours Yahoo, ajusté des divisions, pour mesurer une performance.
 function Fn_PointsCours(isin, periode, resolution) {
   if ((periode === '1J' || periode === '5J') && resolution === 'minute') {
     const m = Var_Cours.minute[isin]; if (!m || !m.t || !m.t.length) return null;
@@ -1638,9 +1666,9 @@ function Fn_PointsCours(isin, periode, resolution) {
     return m.t.slice(i0).map((t, i) => ({ etiquette: Fmt_Heure(t, m.decalage), v: m.c[i0 + i], jour: jourDe(t) }));
   }
   const s = Fn_Serie(isin); if (!s) return null;
-  const p = Cst_Periodes.find(x => x[0] === periode), depuis = p && p[2] ? Fn_Jour(Date.now() - p[2] * 86400000) : '0000-00-00';
+  const e = Fn_CoursEpoque(s), p = Cst_Periodes.find(x => x[0] === periode), depuis = p && p[2] ? Fn_Jour(Date.now() - p[2] * 86400000) : '0000-00-00';
   const i0 = Math.max(0, Fn_RangAu(s.jours, depuis));
-  return s.jours.slice(i0).map((j, i) => ({ etiquette: Fmt_Jour(j), v: s.clotures[i0 + i], jour: j }));
+  return s.jours.slice(i0).map((j, i) => ({ etiquette: Fmt_Jour(j), v: e.clotures[i0 + i], va: s.clotures[i0 + i], jour: j }));
 }
 function Fn_TitresCours() {
   const c = Fn_Derniere(), detenus = c ? c.positions.slice().sort((a, b) => b.valeur - a.valeur) : [];
@@ -1917,7 +1945,7 @@ function Fn_RendreEcarts(c) {
   const carte = $('c-ecarts'), zone = $('g-ecarts');
   const lignes = Fn_LignesMemo(), fx = Fn_Fx(), cartes = [];
   (c ? c.positions : []).forEach(p => {
-    const l = lignes[p.isin], s = Fn_Serie(p.isin);
+    const l = lignes[p.isin], s = Fn_CoursEpoque(Fn_Serie(p.isin));
     if (!l || !s) return;
     // Début de la détention actuelle : après la dernière fois où la ligne a été soldée.
     let debut = l.etats[0].date;
@@ -1969,11 +1997,20 @@ function Fn_GrapheGainPct(hist) {
     + (vals[pic] != null && pic !== n ? ' ; plus haut sur 12 mois ' + Fmt_Pct(vals[pic], 1, true) + ' le ' + Fmt_Jour(hist.jours[pic]) : '')
     + '. Un versement fait baisser ce % sans perte (l’argent neuf n’a encore rien gagné) ; le XIRR, lui, en tient compte.';
 }
+// Sous le cours d'une ligne : les distributions et divisions prises en compte, et celles que le relevé ne confirme pas.
+function Fn_HtmlDivisions(isin, ligne) {
+  const { vus, manquants } = Fn_ControleDivisions(isin, ligne), lib = l => [...new Set(l.map(d => Fn_LibDivision(d.r)))].join(', ');
+  return (vus.length ? '<div class="muet" style="margin-top:6px">Cours d’avant le ' + Fmt_Jour(vus[vus.length - 1].j) + ' remis à leur niveau d’époque (Yahoo les abaisse après chaque '
+      + 'distribution) : ' + lib(vus) + ' le ' + vus.map(d => Fmt_Jour(d.j)).join(', le ') + ' — retrouvé' + (vus.length > 1 ? 's' : '') + ' dans votre relevé.</div>' : '')
+    + (manquants.length ? '<div class="note note-warn">Yahoo indique ' + lib(manquants) + ' le ' + manquants.map(d => Fmt_Jour(d.j)).join(', le ')
+      + ', pendant que vous déteniez ce titre, mais votre relevé ne montre aucune opération sur titres ce jour-là : à vérifier (relevé incomplet ?).</div>' : '');
+}
 function Fn_RendreStatsCours(pts, pos, ops, ligne) {
   if (!pts || pts.length < 2) { $('cours-stats').innerHTML = ''; return; }
-  const v = pts.map(p => p.v), dernier = v[v.length - 1], variation = (dernier / v[0] - 1) * 100;
+  // Variation et volatilité sur le cours Yahoo (va) : une distribution d'actions gratuites n'est pas une baisse.
+  const v = pts.map(p => p.v), va = pts.map(p => p.va != null ? p.va : p.v), dernier = v[v.length - 1], variation = (va[va.length - 1] / va[0] - 1) * 100;
   const haut = Math.max(...v), bas = Math.min(...v);
-  const vol = Var_Vue.resolution === 'jour' && v.length > 20 ? Fn_Volatilite(Fn_Rendements(v)) : null;
+  const vol = Var_Vue.resolution === 'jour' && va.length > 20 ? Fn_Volatilite(Fn_Rendements(va)) : null;
   const tuile = (lib, val, cls) => '<div class="tuile"><div class="lib">' + lib + '</div><div class="val ' + (cls || '') + '" style="font-size:16px">' + val + '</div></div>';
   const isin = Var_Vue.isin, nomActuel = pos ? pos.nom : ((Fn_ListeSymboles().titres.find(t => t.isin === isin) || {}).nom || '');
   const anciens = Fn_Anciens(isin, nomActuel);
@@ -1989,6 +2026,7 @@ function Fn_RendreStatsCours(pts, pos, ops, ligne) {
     + '</div><div class="muet" style="margin-top:6px">' + (pos && pos.pru && (pos.pru < bas * 0.7 || pos.pru > haut * 1.3) ? 'PRU ' + Fmt_Nb(pos.pru, 3) + ', hors du graphique · ' : '')
     + 'ISIN ' + Fn_Esc(isin) + (corr ? ' · Yahoo ' + Fn_Esc(corr) : '')
     + (anciens.length ? ' · anciens noms : ' + anciens.map(a => Fn_Esc(a.nom) + (a.du || a.au ? ' (' + (a.du ? Fmt_Jour(a.du) : '…') + ' → ' + (a.au ? Fmt_Jour(a.au) : '…') + ')' : '') + ' <span title="source">· ' + Fn_Esc(a.source) + '</span>').join(', ') : '') + '</div>'
+    + Fn_HtmlDivisions(isin, ligne)
     + (toutesOps.length ? '<details><summary>' + toutesOps.length + ' achat(s) et vente(s) dans le relevé' + (toutesOps.some(o => o.ost) ? ', opérations sur titres comprises' : '') + '</summary><div class="defile"><table><thead><tr><th>Date</th><th>Opération</th><th>Qté</th><th>Prix</th>' + (apres ? '<th>PRU après</th>' : '') + '</tr></thead><tbody>'
       + toutesOps.map((o, k) => [o, k]).reverse().map(([o, k]) => '<tr><td>' + Fmt_Jour(o.date) + '</td><td>' + (o.type === 'achat' ? '▲ achat' : '▼ vente') + (o.ost ? '<div class="muet">' + Fn_Esc(o.ost) + (o.herite ? ' (ancien ISIN)' : '') + '</div>' : '') + '</td><td>' + Fmt_Nb(o.qte, 0) + '</td><td>' + Fmt_Nb(o.prix, 3) + ' ' + Fn_Esc(Cst_DevSymbole[o.dev] || o.dev) + '</td>'
       + (apres ? '<td>' + (apres[k].pru != null ? Fmt_Nb(apres[k].pru, 3) : '<span class="muet">soldée</span>') + '</td>' : '') + '</tr>').join('')
