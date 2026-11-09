@@ -122,6 +122,7 @@ select { max-width: 100%; }
 .onglets button { flex: 1 0 auto; font: inherit; font-size: 13px; color: var(--encre-2); background: none; border: 0; border-radius: 8px; padding: 8px 5px; cursor: pointer; }
 .onglets button[aria-selected="true"] { background: var(--serie-1); color: #fff; font-weight: 600; }
 .hors-onglet { display: none !important; }
+table.gauche th, table.gauche td { text-align: left; }
 </style>
 </head>
 <body>
@@ -1993,6 +1994,28 @@ function Fn_RendreStatsCours(pts, pos, ops, ligne) {
       + (apres ? '<td>' + (apres[k].pru != null ? Fmt_Nb(apres[k].pru, 3) : '<span class="muet">soldée</span>') + '</td>' : '') + '</tr>').join('')
       + '</tbody></table></div></details>' : '');
 }
+/* CORRESPONDANCE DEGIRO → YAHOO de toutes les actions, détenues et vendues : le symbole retenu par le robot et le nom de la
+   société chez Yahoo, pour vérifier d'un coup d'œil ; une case pour imposer un autre symbole (le robot ne contrôle alors que la
+   devise). Une action achetée et revendue le même jour n'a besoin d'aucun cours : la valeur du compte se compte le soir. */
+function Fn_TableauSymboles(idx) {
+  const lignes = Fn_LignesMemo(), series = new Map((idx.series || []).map(s => [s.id, s])), introuvables = new Set((idx.introuvables || []).map(x => x.isin));
+  const titres = Fn_ListeSymboles().titres.slice().sort((a, b) => (b.detenu - a.detenu) || String(a.nom).localeCompare(String(b.nom), 'fr'));
+  const ligne = t => {
+    const s = series.get(t.isin), f = Var_Cours.series[t.isin] || {}, l = lignes[t.isin], impose = (Var_Etat.corrSymboles || {})[t.isin] || '';
+    const etat = s ? '<b>' + Fn_Esc(s.symbole) + '</b><div class="muet">' + Fn_Esc(f.nom || '') + (f.place ? ' · ' + Fn_Esc(f.place) : '') + ' · ' + s.nb + ' j</div>'
+      : l && l.etats.every(e => !e.qte) ? '<span class="muet">acheté et revendu le même jour : aucun cours nécessaire</span>'
+      : introuvables.has(t.isin) ? '<span class="neg">introuvable</span>' : '<span class="muet">pas encore trouvé : essai le soir</span>';
+    return '<tr><td>' + Fn_Esc(t.nom) + '<div class="muet">' + (t.ticker ? Fn_Esc(t.ticker) + ' · ' : '') + Fn_Esc(t.isin) + (t.detenu ? '' : ' · vendu') + '</div></td>'
+      + '<td>' + etat + '</td><td><input type="text" data-corr="' + Fn_Esc(t.isin) + '" placeholder="' + Fn_Esc(s ? s.symbole : 'symbole') + '" value="' + Fn_Esc(impose)
+      + '" autocapitalize="characters" style="width:72px"></td></tr>';
+  };
+  return '<h2 style="margin-top:12px">Actions et symboles Yahoo</h2>'
+    + '<div class="muet">Le robot cherche chaque action chez Yahoo à partir de son ISIN, et ne garde un symbole que si la devise et le nom de la société concordent. '
+    + 'Si un symbole vous semble faux, tapez le bon dans la case (ex. « ALO.PA », « RIO.L », « AAPL ») : il l’emporte, à condition d’être dans la devise vue sur DEGIRO. '
+    + 'Case vide : le choix du robot. Pris en compte au passage du soir.</div>'
+    + '<div class="defile"><table class="gauche"><thead><tr><th>Action (DEGIRO)</th><th>Yahoo</th><th>Imposer</th></tr></thead><tbody>' + titres.map(ligne).join('') + '</tbody></table></div>'
+    + '<div class="rang"><button id="b-corr">Envoyer au robot</button></div>';
+}
 function Fn_RendreReglagesCours() {
   const jeton = Lire_Local(Cst_CleJeton), r = Fn_Reglages(), idx = Var_Cours.index;
   $('r-cours').innerHTML = '<div class="muet">Chaque soir à 22 h 30, le <b>téléphone</b> (macro « Smart - cours ») télécharge les cours chez Yahoo Finance — '
@@ -2006,14 +2029,7 @@ function Fn_RendreReglagesCours() {
     + '<button id="b-jeton">' + (jeton ? 'Remplacer' : 'Enregistrer') + '</button>' + (jeton ? '<button id="b-jeton-effacer">Effacer</button>' : '') + '</div>'
     + (jeton ? '<div class="muet">Clé enregistrée dans ce navigateur (…' + Fn_Esc(jeton.slice(-4)) + '), jamais dans les sauvegardes.</div>' : '')
     + '<div class="rang"><button id="b-cours-maj"' + (jeton ? '' : ' disabled') + '>Mettre à jour maintenant</button></div>'
-    + (idx ? '<h2 style="margin-top:10px">Titres suivis par le robot</h2><div class="defile"><table><thead><tr><th>Titre</th><th>Symbole</th><th>Cours</th></tr></thead><tbody>'
-      + (idx.series || []).filter(s => !/^(FX|IDX)-/.test(s.id)).map(s => '<tr><td>' + Fn_Esc(Fn_NomTitre(s.id)) + '</td><td>' + Fn_Esc(s.symbole) + '</td><td>' + s.nb + ' j · ' + Fmt_Jour(s.du) + ' → ' + Fmt_Jour(s.au) + (s.minute ? ' · minute' : '') + '</td></tr>').join('')
-      + '</tbody></table></div>' : '')
-    + (idx && (idx.introuvables || []).length ? '<h2 style="margin-top:10px">Introuvables (renommés, radiés ou cotés ailleurs)</h2><div class="muet">Indiquez le symbole Yahoo Finance du titre (ex. « ALO.PA », « RIO.L »). '
-      + 'Pour un titre renommé, c’est son symbole ACTUEL ; un titre radié n’a souvent plus de cours.</div>'
-      + idx.introuvables.map(x => '<div class="reglage"><span style="min-width:150px">' + Fn_Esc(x.nom || x.isin) + ' <span class="muet">' + Fn_Esc(x.isin) + '</span></span>'
-        + '<input type="text" data-corr="' + Fn_Esc(x.isin) + '" placeholder="symbole" value="' + Fn_Esc((Var_Etat.corrSymboles || {})[x.isin] || '') + '" style="width:110px"></div>').join('')
-      + '<div class="rang"><button id="b-corr">Envoyer les corrections au robot</button></div>' : '')
+    + (idx ? Fn_TableauSymboles(idx) : '')
     + (idx && (idx.erreurs || []).length ? '<div class="note note-warn">Dernier passage du robot : ' + idx.erreurs.map(Fn_Esc).join(' ; ') + '</div>' : '');
   $('b-jeton').onclick = () => { const v = $('i-jeton').value.trim(); if (!v) return; Ecrire_Local(Cst_CleJeton, v); Fn_ChargerCours(true); };
   if ($('b-jeton-effacer')) $('b-jeton-effacer').onclick = () => { Ecrire_Local(Cst_CleJeton, ''); Fn_RendreCours(); };
