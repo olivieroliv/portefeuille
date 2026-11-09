@@ -1779,7 +1779,8 @@ function Fn_GrapheCours(pts, pos, ops, ligne) {
     const r = svg.getBoundingClientRect(), i = Math.max(0, Math.min(pts.length - 1, Math.round(((ev.clientX - r.left) * W / r.width - g) / (W - g - d) * (pts.length - 1))));
     ret.setAttribute('x1', X(i)); ret.setAttribute('x2', X(i)); ret.setAttribute('visibility', 'visible');
     pt.setAttribute('cx', X(i)); pt.setAttribute('cy', Y(pts[i].v)); pt.setAttribute('visibility', 'visible');
-    const var0 = (pts[i].v / pts[0].v - 1) * 100, op = visibles.filter(o => o.date === pts[i].jour);
+    const a = p => p.va != null ? p.va : p.v;   // performance : sur le cours Yahoo (une distribution n'est pas une baisse)
+    const var0 = (a(pts[i]) / a(pts[0]) - 1) * 100, op = visibles.filter(o => o.date === pts[i].jour);
     bulle.montrer('<b>' + Fn_Esc(pts[i].etiquette) + '</b><br>' + fmt(pts[i].v) + ' ' + Fn_Esc(dev) + ' · ' + Fmt_Pct(var0, 1, true) + ' sur la période'
       + (pruHisto && pruJour[i] != null ? '<br>Votre PRU ' + fmt(pruJour[i]) + ' · écart ' + Fmt_Pct((pts[i].v / pruJour[i] - 1) * 100, 1, true) : '')
       + op.map(o => '<br>' + (o.type === 'achat' ? '▲ achat ' : '▼ vente ') + Fmt_Nb(o.qte, 0) + ' à ' + fmt(o.prix) + (o.ost ? ' (' + Fn_Esc(o.ost) + ')' : '')).join(''), X(i), Y(pts[i].v), Y(pts[i].v));
