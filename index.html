@@ -114,25 +114,41 @@ select { max-width: 100%; }
 .puce i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; }
 .puce[aria-pressed="true"] { color: var(--encre); border-color: var(--bord); background: var(--surface-2); font-weight: 600; }
 .multiple .val { font-size: 15px; font-weight: 600; }
+/* Onglets : barre collée en haut, qui s'efface quand on fait défiler vers le bas et revient dès qu'on remonte. */
+.onglets { position: sticky; top: 0; z-index: 20; display: flex; overflow-x: auto; scrollbar-width: none; margin: 8px -16px 4px; padding: 6px 8px;
+  background: var(--plan); border-bottom: 1px solid var(--grille); transition: transform .2s ease; }
+.onglets::-webkit-scrollbar { display: none; }
+.onglets.cachee { transform: translateY(-110%); }
+.onglets button { flex: 1 0 auto; font: inherit; font-size: 13px; color: var(--encre-2); background: none; border: 0; border-radius: 8px; padding: 8px 5px; cursor: pointer; }
+.onglets button[aria-selected="true"] { background: var(--serie-1); color: #fff; font-weight: 600; }
+.hors-onglet { display: none !important; }
 </style>
 </head>
 <body>
 <main>
   <h1>Portefeuille</h1>
   <div class="sous" id="entete">Aucune capture reçue.</div>
+  <nav class="onglets" id="onglets" role="tablist" aria-label="Rubriques">
+    <button type="button" role="tab" data-onglet="accueil">Accueil</button>
+    <button type="button" role="tab" data-onglet="evolution">Évolution</button>
+    <button type="button" role="tab" data-onglet="pru">PRU</button>
+    <button type="button" role="tab" data-onglet="detail">Détail</button>
+    <button type="button" role="tab" data-onglet="analyse">Analyse</button>
+    <button type="button" role="tab" data-onglet="releve">Relevé</button>
+    <button type="button" role="tab" data-onglet="reglages">Réglages</button>
+  </nav>
   <div id="alerte-stockage"></div>
   <div id="reception"></div>
 
-  <section id="v-synthese"></section>
+  <section id="v-synthese" data-onglet="accueil"></section>
 
-  <section class="carte" id="c-indicateurs">
+  <section class="carte" id="c-indicateurs" data-onglet="accueil">
     <h2>Indicateurs</h2>
-    <div class="muet">Chaque indicateur compare sa valeur à deux seuils réglables : ✓ bon · ! à surveiller · ✕ alerte. « En attente » : il manque une donnée (relevé de compte ou cours). Touchez un indicateur pour son explication.</div>
+    <div class="muet">Chaque indicateur compare sa valeur à deux seuils (réglables dans l’onglet Réglages) : ✓ bon · ! à surveiller · ✕ alerte. « En attente » : il manque une donnée (relevé de compte ou cours). Touchez un indicateur pour son explication.</div>
     <div id="t-indicateurs"></div>
-    <details><summary>Régler les indicateurs</summary><div id="r-indicateurs"></div></details>
   </section>
 
-  <section class="carte" id="c-evolution">
+  <section class="carte" id="c-evolution" data-onglet="evolution">
     <h2>Évolution de la valeur</h2>
     <div class="muet" id="evolution-sous"></div>
     <div class="legende" id="evolution-legende"></div>
@@ -145,19 +161,19 @@ select { max-width: 100%; }
     <details><summary>Valeurs</summary><div class="defile" id="t-evolution"></div></details>
   </section>
 
-  <section class="carte" id="c-repartition">
+  <section class="carte" id="c-repartition" data-onglet="accueil">
     <h2>Répartition par ligne</h2>
     <div class="muet">Part de chaque titre dans la valeur des titres, de la plus grosse à la plus petite.</div>
     <div class="graphe" id="g-repartition"></div>
   </section>
 
-  <section class="carte" id="c-plusvalues">
+  <section class="carte" id="c-plusvalues" data-onglet="accueil">
     <h2>Plus-values latentes par ligne</h2>
     <div class="muet">Gain ou perte depuis l'achat, en euros, change compris (comme DEGIRO). Bleu : gain · rouge : perte.</div>
     <div class="graphe" id="g-plusvalues"></div>
   </section>
 
-  <section class="carte cache" id="c-ecarts">
+  <section class="carte cache" id="c-ecarts" data-onglet="pru">
     <h2>Écart au PRU, toutes les lignes</h2>
     <div class="muet">Pour chaque ligne détenue, depuis son achat : l’écart entre sa valeur et ce qu’elle vous a coûté, <b>en euros, change compris</b>
       (comme DEGIRO).</div>
@@ -168,13 +184,13 @@ select { max-width: 100%; }
     <div class="multiples" id="g-ecarts"></div>
   </section>
 
-  <section class="carte" id="c-positions">
+  <section class="carte" id="c-positions" data-onglet="accueil">
     <h2>Positions</h2>
-    <div class="muet">Touchez une ligne pour voir son cours.</div>
+    <div class="muet">Touchez une ligne pour ouvrir son détail : cours, écart au PRU, achats et ventes.</div>
     <div class="defile" id="t-positions"></div>
   </section>
 
-  <section class="carte" id="c-cours">
+  <section class="carte" id="c-cours" data-onglet="detail">
     <h2>Cours par action</h2>
     <div class="muet" id="cours-etat"></div>
     <div class="reglage"><select id="s-titre" aria-label="Titre"></select></div>
@@ -188,10 +204,9 @@ select { max-width: 100%; }
       <div class="graphe" id="g-ecart"></div>
     </div>
     <div id="cours-stats"></div>
-    <details><summary>Réglages des cours (accès GitHub, symboles)</summary><div id="r-cours"></div></details>
   </section>
 
-  <section class="carte" id="c-analyse">
+  <section class="carte" id="c-analyse" data-onglet="analyse">
     <h2>Analyse par Claude</h2>
     <div class="rang"><button class="accent" id="b-analyse-robot">Analyse complète par Claude</button></div>
     <div class="muet">Sur votre abonnement Claude, sans coût d’API. Claude travaille seul, sur GitHub (5 à 20 minutes) : il cherche, ligne par ligne,
@@ -210,10 +225,9 @@ select { max-width: 100%; }
     </div>
     <div id="analyse-confirmer"></div>
     <div id="analyse-resultat" class="rapport"></div>
-    <details><summary>Réglages de l’analyse</summary><div id="r-analyse"></div></details>
   </section>
 
-  <section class="carte" id="c-releve">
+  <section class="carte" id="c-releve" data-onglet="releve">
     <h2>Relevé de compte</h2>
     <div class="muet">Le relevé DEGIRO (fichier CSV) donne vos versements et retraits — c'est lui qui permet le XIRR, le rendement annuel de votre
       argent — ainsi que les dividendes, impôts, frais et opérations de change. Importez-le une fois depuis l'ouverture du compte ; ensuite, après
@@ -224,7 +238,7 @@ select { max-width: 100%; }
     </div>
   </section>
 
-  <section class="carte">
+  <section class="carte" data-onglet="reglages">
     <h2>Captures</h2>
     <div id="captures-etat" class="muet"></div>
     <div class="rang">
@@ -235,16 +249,33 @@ select { max-width: 100%; }
       <textarea id="t-collage" placeholder="Collez ici le document de la macro (===VIGIE:META=== …)"></textarea>
       <div class="rang"><button class="accent" id="b-integrer">Intégrer</button></div>
     </div>
-    <details>
-      <summary>Sauvegarde et réglages</summary>
-      <div class="rang">
-        <button id="b-sauver">Télécharger une sauvegarde</button>
-        <label class="btn">Restaurer une sauvegarde<input type="file" accept=".json,application/json" id="f-restaurer" class="cache"></label>
-        <button id="b-theme">Thème : auto</button>
-        <button id="b-effacer">Tout effacer</button>
-      </div>
-      <div class="muet" style="margin-top:6px">Toutes les données restent dans ce navigateur, sur cet appareil. Rien n'est envoyé nulle part.</div>
-    </details>
+  </section>
+
+  <section class="carte" data-onglet="reglages">
+    <h2>Cours (accès GitHub, symboles)</h2>
+    <div id="r-cours"></div>
+  </section>
+
+  <section class="carte" data-onglet="reglages">
+    <h2>Analyse par Claude</h2>
+    <div id="r-analyse"></div>
+  </section>
+
+  <section class="carte" data-onglet="reglages">
+    <h2>Seuils des indicateurs</h2>
+    <div id="r-indicateurs"></div>
+  </section>
+
+  <section class="carte" data-onglet="reglages">
+    <h2>Sauvegarde et affichage</h2>
+    <div class="rang">
+      <button id="b-sauver">Télécharger une sauvegarde</button>
+      <label class="btn">Restaurer une sauvegarde<input type="file" accept=".json,application/json" id="f-restaurer" class="cache"></label>
+      <button id="b-theme">Thème : auto</button>
+      <button id="b-effacer">Tout effacer</button>
+    </div>
+    <div class="muet" style="margin-top:6px">Vos données restent dans ce navigateur, sur cet appareil. Seules partent sur votre dépôt GitHub privé la liste
+      de vos titres (pour les cours) et, quand vous la lancez, la demande d’une analyse complète.</div>
   </section>
 </main>
 
@@ -320,9 +351,12 @@ function Fn_LirePosition(l) {
   if (cours == null || nb.length < 9) return null;
   const valeur = nb[0], pru = nb[2], plJour = nb[4], plLat = nb[6], total = nb[8];
   if (valeur !== nb[1] || pru !== nb[3] || plLat !== nb[7]) return null;
-  // Quantité : ce qui reste avant l'ISIN, une fois retirés la devise et le cours.
+  // Quantité : ce qui reste avant l'ISIN, une fois retirés la devise et le cours. Bourse ouverte, DEGIRO peut afficher deux
+  // cours différents sur la même ligne (« $ 35,65 29 29 … $ 35,63 », capture du 09/11) : à défaut du même texte, le premier
+  // cours est reconnu à sa forme (devise, nombre à virgule). Le cours retenu reste celui de droite, le plus récent.
   const droite = tete.slice(p + 1), iC = droite.indexOf(coursTxt);
-  const qte = iC >= 0 ? Fn_QuantiteDoublee(droite.slice(iC + coursTxt.length)) : null;
+  const mC = iC >= 0 ? null : new RegExp('^' + Cst_Esp + '*(?:€|\\$|£|[A-Z]{3})' + Cst_Esp + '*-?\\d[\\d.\\s\\u00a0\\u202f]*,\\d+').exec(droite);
+  const qte = iC >= 0 ? Fn_QuantiteDoublee(droite.slice(iC + coursTxt.length)) : mC ? Fn_QuantiteDoublee(droite.slice(mC[0].length)) : null;
   const fx = (qte && cours) ? (dev === 'EUR' ? 1 : valeur / (qte * cours)) : null;
   const investi = valeur - plLat;
   return { isin: mI[1], nom, ticker, dev, cours, qte, valeur, pru, plJour, plLat,
@@ -911,7 +945,7 @@ function Fn_Sauver() {
     catch (e) { Fn_Alleger(garder); }
   }
   $('alerte-stockage').innerHTML = '<div class="note note-crit"><b>Enregistrement impossible</b> : le stockage du navigateur est plein ou bloqué. '
-    + 'Téléchargez une sauvegarde (en bas de page) avant de fermer cette page.</div>';
+    + 'Téléchargez une sauvegarde (onglet Réglages) avant de fermer cette page.</div>';
   return false;
 }
 
@@ -996,7 +1030,7 @@ async function Fn_ReceptionAuto() {
   catch (e) {
     Fn_NoteReception('warn', 'Le navigateur demande un appui pour lire le presse-papier.'
       + '<div class="rang"><button class="accent" id="b-recevoir">' + (releve ? 'Recevoir le relevé' : 'Recevoir la capture') + '</button></div>');
-    $('b-recevoir').onclick = () => recevoir().catch(() => Fn_NoteReception('crit', 'Lecture du presse-papier refusée : utilisez « Coller une capture » en bas de page.'));
+    $('b-recevoir').onclick = () => recevoir().catch(() => Fn_NoteReception('crit', 'Lecture du presse-papier refusée : utilisez « Coller une capture » dans l’onglet Réglages.'));
   }
 }
 
@@ -1240,7 +1274,7 @@ function Fn_GrapheEvolution(k) {
     flux.filter(f => quand(f) > tMin).forEach(f => { cumul += f.montant; marches.push({ t: quand(f), v: cumul }); });
     marches.push({ t: tMax, v: cumul });
   }
-  sous.textContent = (pts.length === 1 ? 'Une seule capture pour l’instant : chaque nouvelle capture ajoute un point. Les captures archivées du téléphone (Documents/Vigie/captures) peuvent être importées en bas de page.'
+  sous.textContent = (pts.length === 1 ? 'Une seule capture pour l’instant : chaque nouvelle capture ajoute un point. Les captures archivées du téléphone (Documents/Vigie/captures) peuvent être importées dans l’onglet Réglages.'
     : pts.length + ' captures, du ' + Fmt_Date(pts[0].t) + ' au ' + Fmt_Date(dernier.t) + '.');
   leg.innerHTML = '<span><i style="background:var(--serie-1)"></i>Valeur nette</span>' + (marches.length ? '<span><i style="background:var(--serie-2)"></i>Versements nets cumulés</span>' : '');
   const W = zone.clientWidth, H = 240, g = 58, d = 64, h = 12, b = 26;
@@ -1304,7 +1338,7 @@ function Fn_RendreTableau(c) {
     + '</tbody></table>'
     + (alertes.length ? '<div class="note note-warn">À vérifier sur cette capture : ' + Fn_Esc(alertes.join(' ; ')) + '.</div>' : '');
   document.querySelectorAll('#t-positions tr[data-isin]').forEach(tr => tr.onclick = () => {
-    Var_Vue.isin = tr.dataset.isin; Fn_RendreCours(); $('c-cours').scrollIntoView({ behavior: 'smooth' });
+    Var_Vue.isin = tr.dataset.isin; Fn_Onglet('detail');
   });
 }
 // Liens d'ISIN du relevé, et anciens noms d'un titre : relevé, changements d'ISIN, Wikidata (rapporté par le robot).
@@ -1377,6 +1411,26 @@ function Fn_Theme() {
   if (t === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', t);
   $('b-theme').textContent = 'Thème : ' + ({ auto: 'auto', light: 'clair', dark: 'sombre' }[t]);
 }
+/* ---------- onglets ---------- */
+// Une rubrique à la fois. Un graphique dessiné caché n'aurait pas de largeur : changer d'onglet redessine la page.
+let Var_Onglet = 'accueil';
+function Fn_Onglet(nom) {
+  Var_Onglet = nom;
+  document.querySelectorAll('#onglets [data-onglet]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.onglet === nom)));
+  document.querySelectorAll('main > [data-onglet]').forEach(s => s.classList.toggle('hors-onglet', s.dataset.onglet !== nom));
+  $('onglets').classList.remove('cachee');
+  window.scrollTo(0, 0);
+  Fn_Rendre();
+}
+document.querySelectorAll('#onglets [data-onglet]').forEach(b => { b.onclick = () => Fn_Onglet(b.dataset.onglet); });
+// La barre s'efface quand on fait défiler vers le bas pour lire, et revient dès qu'on remonte un peu.
+let Var_DernierY = window.scrollY;
+window.addEventListener('scroll', () => {
+  const y = window.scrollY, nav = $('onglets');
+  if (y < 60 || y < Var_DernierY - 8) nav.classList.remove('cachee');
+  else if (y > Var_DernierY + 8) nav.classList.add('cachee');
+  if (Math.abs(y - Var_DernierY) > 8) Var_DernierY = y;
+}, { passive: true });
 const lireFichier = f => new Promise((ok, ko) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = ko; r.readAsText(f, 'utf-8'); });
 
 $('b-coller').onclick = () => $('zone-collage').classList.toggle('cache');
@@ -1597,10 +1651,10 @@ function Fn_RendreCours() {
   // Sans capture : seulement les réglages (la clé d'accès se colle avant la première capture, qui écrase le presse-papier).
   ['s-titre', 'b-periodes', 'b-resolution', 'cours-legende', 'g-cours', 'bloc-ecart', 'cours-stats'].forEach(id => { const e = $(id); (e.closest('.reglage') || e).classList.toggle('cache', !c); });
   if (!c) { $('cours-etat').textContent = Lire_Local(Cst_CleJeton) ? 'Clé d’accès enregistrée. Les graphiques des cours s’afficheront après la première capture.'
-    : 'Collez ici la clé d’accès GitHub (réglages ci-dessous) ; les graphiques des cours s’afficheront après la première capture.'; Fn_RendreReglagesCours(); return; }
+    : 'Collez d’abord la clé d’accès GitHub (onglet Réglages, rubrique Cours) ; les graphiques des cours s’afficheront après la première capture.'; Fn_RendreReglagesCours(); return; }
   const jeton = !!Lire_Local(Cst_CleJeton), idx = Var_Cours.index;
   let etat;
-  if (!jeton) etat = 'Pour afficher les cours, il faut une fois une clé d’accès GitHub (réglages en bas de cette carte).';
+  if (!jeton) etat = 'Pour afficher les cours, il faut une fois une clé d’accès GitHub (onglet Réglages, rubrique Cours).';
   else if (Var_Cours.enCours) etat = 'Mise à jour des cours…';
   else if (idx) etat = 'Cours du ' + Fmt_DateHeure(Date.parse(idx.maj)) + ' (robot) · ' + (idx.series || []).length + ' séries'
     + ((idx.introuvables || []).length ? ' · ' + idx.introuvables.length + ' titre(s) introuvable(s), voir les réglages' : '');
@@ -1639,7 +1693,7 @@ function Fn_GrapheCours(pts, pos, ops, ligne) {
   const zone = $('g-cours'); zone.innerHTML = ''; $('cours-legende').innerHTML = '';
   if (!pts || pts.length < 2) {
     const intro = Var_Cours.index && (Var_Cours.index.introuvables || []).find(x => x.isin === Var_Vue.isin);
-    zone.innerHTML = '<div class="muet" style="padding:16px 0">' + (intro ? 'Titre introuvable chez Yahoo Finance (renommé, radié ou autre place) : corrigez son symbole dans les réglages ci-dessous.'
+    zone.innerHTML = '<div class="muet" style="padding:16px 0">' + (intro ? 'Titre introuvable chez Yahoo Finance (renommé, radié ou autre place) : corrigez son symbole dans l’onglet Réglages, rubrique Cours.'
       : Lire_Local(Cst_CleJeton) ? 'Pas de cours pour ce titre et cette période.' : 'Les cours apparaîtront ici une fois l’accès GitHub configuré.') + '</div>';
     return;
   }
@@ -2139,7 +2193,7 @@ const Cst_AttenteMaxMin = 55;   // le robot s'arrête de lui-même au bout de 50
 let Var_AttenteRobot = null;
 async function Fn_LancerAnalyseRobot() {
   const etat = $('analyse-robot-etat'), a = Var_Etat.analyseRobot || {};
-  if (!Lire_Local(Cst_CleJeton)) { etat.innerHTML = '<div class="note note-warn">Il faut d’abord l’accès GitHub (carte « Cours », Réglages) : c’est lui qui porte la demande au robot.</div>'; return; }
+  if (!Lire_Local(Cst_CleJeton)) { etat.innerHTML = '<div class="note note-warn">Il faut d’abord l’accès GitHub (onglet Réglages, rubrique Cours) : c’est lui qui porte la demande au robot.</div>'; return; }
   if (a.attendu && Date.now() - a.attendu < Cst_AttenteMaxMin * 60000) { Fn_SuivreAnalyseRobot(); return; }
   const ts = Date.now(), texte = Fn_DemandeApp(Fn_Calculs(), true);
   etat.innerHTML = '<div class="note">Envoi de la demande…</div>';
@@ -2285,7 +2339,7 @@ function Fn_RendreAnalyse() {
   $('s-effort').onchange = e => { Var_Etat.reglages = Object.assign(Var_Etat.reglages || {}, { effort: e.target.value }); Fn_Sauver(); };
 }
 
-Fn_Theme(); Fn_Rendre(); Fn_ReceptionAuto(); Fn_ChargerCours(false); Fn_SuivreAnalyseRobot();
+Fn_Theme(); Fn_Onglet('accueil'); Fn_ReceptionAuto(); Fn_ChargerCours(false); Fn_SuivreAnalyseRobot();
 </script>
 </body>
 </html>
