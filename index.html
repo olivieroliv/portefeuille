@@ -125,6 +125,8 @@ select { max-width: 100%; }
 .onglets button[aria-selected="true"] { background: var(--serie-1); color: #fff; font-weight: 600; }
 .hors-onglet { display: none !important; }
 table.gauche th, table.gauche td { text-align: left; }
+table.gauche-1 th:first-child, table.gauche-1 td:first-child { text-align: left; }
+.legende i.tache { width: 10px; height: 10px; border-radius: 2px; }
 </style>
 </head>
 <body>
@@ -136,9 +138,10 @@ table.gauche th, table.gauche td { text-align: left; }
     <button type="button" role="tab" data-onglet="evolution">Évolution</button>
     <button type="button" role="tab" data-onglet="pru">PRU</button>
     <button type="button" role="tab" data-onglet="detail">Détail</button>
+    <button type="button" role="tab" data-onglet="revenus">Revenus</button>
     <button type="button" role="tab" data-onglet="analyse">Analyse</button>
     <button type="button" role="tab" data-onglet="releve">Relevé</button>
-    <button type="button" role="tab" data-onglet="reglages">Réglages</button>
+    <button type="button" role="tab" data-onglet="reglages" aria-label="Réglages" title="Réglages">⚙</button>
   </nav>
   <div id="alerte-stockage"></div>
   <div id="reception"></div>
@@ -208,6 +211,25 @@ table.gauche th, table.gauche td { text-align: left; }
       <div class="graphe" id="g-ecart"></div>
     </div>
     <div id="cours-stats"></div>
+  </section>
+
+  <section class="carte" id="c-plusvalues-realisees" data-onglet="revenus">
+    <h2>Plus-values réalisées</h2>
+    <div class="muet">Lignes <b>entièrement vendues</b> seulement, comptées le jour de la dernière vente, avec tous leurs achats et ventes depuis
+      leur ouverture : une ligne encore détenue ne compte pas, même vendue en partie. En euros, au taux de change de chaque opération.
+      Aide au suivi, pas une déclaration fiscale.</div>
+    <div class="choix" id="b-pv-annees" role="group" aria-label="Période"></div>
+    <div class="legende" id="l-pv"></div>
+    <div class="graphe" id="g-pv"></div>
+    <div id="t-pv"></div>
+  </section>
+
+  <section class="carte" id="c-dividendes" data-onglet="revenus">
+    <h2>Dividendes</h2>
+    <div class="muet">Dividendes reçus, en euros au taux du relevé : brut, impôt retenu à la source, net.</div>
+    <div class="legende" id="l-div"></div>
+    <div class="graphe" id="g-div"></div>
+    <div id="t-div"></div>
   </section>
 
   <section class="carte" id="c-analyse" data-onglet="analyse">
@@ -747,7 +769,7 @@ function Fn_Operations(mouvements, isin, liens) {
     const qte = Fn_Nombre(r[3]), prix = Fn_Nombre(r[4]);
     if (qte == null || prix == null) return;
     out.push({ date: m.date, heure: m.heure || '', type: /^(achat|buy)/i.test(r[2]) ? 'achat' : 'vente', qte, prix, dev: r[5] || m.dev, montant: m.montant, devMontant: m.dev,
-      ost: r[1] ? r[1].trim() : '', herite });
+      ost: r[1] ? r[1].trim() : '', herite, ordre: m.ordre || '' });
   });
   return out.sort((a, b) => (a.date + a.heure) < (b.date + b.heure) ? -1 : (a.date + a.heure) > (b.date + b.heure) ? 1 : 0);   // même jour : dans l'ordre des heures
 }
@@ -889,6 +911,53 @@ function Fn_ValeurHistorique(mouvements, corrections, liens, serieDe, fx, jusqua
     jours.push(j); valeurs.push(v + vt); titres.push(vt); estimees.push(est);
   }
   return { jours, valeurs, titres, estimees };
+}
+/* PLUS-VALUES RÉALISÉES DES LIGNES FERMÉES (choix de l'utilisateur : une ligne encore ouverte ne compte pas, même vendue en
+   partie). Une ligne compte le jour où sa dernière action est vendue, avec tous ses achats et ventes depuis qu'elle a été
+   ouverte. Brut = ventes − achats, en euros au taux de chaque opération (montants du relevé). Frais = courtage, taxes sur
+   les transactions et frais de change rattachés à ces ordres (même numéro d'ordre, sinon même date et même heure).
+   Plus-value d'une vente = euros reçus − quantité × PRU en euros d'avant la vente ; leur somme redonne le brut. */
+function Fn_LignesFermees(mouvements, corrections, liens) {
+  const lignes = Fn_Lignes(mouvements, corrections, liens), taux = Fn_Taux(mouvements, corrections), vers = {};
+  (liens || []).forEach(l => { vers[l.de] = l.vers; });
+  const eur = (montant, dev, date, heure) => dev === 'EUR' ? montant : ((Fn_EnEuros({ dev, montant, date, heure }, taux) || {}).v);
+  const frais = (mouvements || []).filter(m => m.isin && /^(frais_courtage|frais_change|taxe|frais)$/.test(Fn_Classer(m, corrections)))
+    .map(m => ({ isin: vers[m.isin] || m.isin, ordre: m.ordre || '', quand: m.date + ' ' + (m.heure || ''), v: eur(m.montant, m.dev, m.date, m.heure), pris: false }));
+  const out = [];
+  Object.values(lignes).forEach(l => {
+    let c = null;
+    l.ops.forEach((o, k) => {
+      if (!c) c = { isin: l.isin, debut: o.date, brut: 0, ventes: [], achats: 0, approx: false, ordres: new Set(), quands: new Set() };
+      const v = eur(o.montant, o.devMontant, o.date, o.heure), avant = k > 0 ? l.apres[k - 1] : null;
+      if (v == null) c.approx = true; else c.brut += v;
+      if (o.ordre) c.ordres.add(o.ordre);
+      c.quands.add(o.date + ' ' + o.heure);
+      if (o.type === 'achat') c.achats++;
+      else c.ventes.push({ date: o.date, qte: o.qte, prix: o.prix, dev: o.dev, pru: avant && avant.pru, eur: v,
+        pv: v != null && avant && avant.pruEur != null ? v - o.qte * avant.pruEur : null });
+      if (o.type === 'vente' && l.apres[k].qte === 0) {   // dernière action vendue : la ligne est fermée
+        let f = 0;
+        frais.forEach(x => { if (!x.pris && x.isin === l.isin && x.v != null && ((x.ordre && c.ordres.has(x.ordre)) || c.quands.has(x.quand))) { x.pris = true; f += x.v; } });
+        out.push({ isin: l.isin, debut: c.debut, fin: o.date, brut: c.brut, frais: f, net: c.brut + f, ventes: c.ventes, achats: c.achats, approx: c.approx, sansAchat: !c.achats });
+        c = null;
+      }
+    });
+  });
+  return out.sort((a, b) => a.fin < b.fin ? -1 : a.fin > b.fin ? 1 : 0);
+}
+/* DIVIDENDES PAR TITRE ET PAR ANNÉE, en euros au taux du relevé : brut (dividendes), impôt retenu à la source, net.
+   { isin: { '2024': { brut, impot } } } ; un dividende versé sous un ancien ISIN compte pour le titre actuel. */
+function Fn_DividendesParAn(mouvements, corrections, liens) {
+  const taux = Fn_Taux(mouvements, corrections), vers = {}, out = {};
+  (liens || []).forEach(l => { vers[l.de] = l.vers; });
+  (mouvements || []).forEach(m => {
+    const t = Fn_Classer(m, corrections);
+    if (t !== 'dividende' && t !== 'impot') return;
+    const e = Fn_EnEuros(m, taux); if (!e) return;
+    const i = vers[m.isin] || m.isin || '—', a = m.date.slice(0, 4), x = ((out[i] = out[i] || {})[a] = out[i][a] || { brut: 0, impot: 0 });
+    if (t === 'dividende') x.brut += e.v; else x.impot += e.v;
+  });
+  return out;
 }
 /* OUTILS COMMUNS DES INDICATEURS (ctx.outils, voir indicateurs.js). fx : { USD: série BCE, GBP: …, … }. */
 function Fn_OutilsIndicateurs(ctx, fx) {
@@ -1406,6 +1475,7 @@ function Fn_Rendre() {
   else $('c-ecarts').classList.add('cache');
   Fn_RendreCours();
   if (c) Fn_RendreAnalyse();
+  Fn_RendreRevenus();
   Fn_RendreReleve();
   const n = Var_Etat.captures.length;
   $('captures-etat').textContent = n ? n + ' capture(s) enregistrée(s), du ' + Fmt_Date(Var_Etat.captures[0].ts) + ' au ' + Fmt_Date(Var_Etat.captures[n - 1].ts) + '.' : 'Aucune capture enregistrée.';
@@ -1875,6 +1945,103 @@ function Fn_GrapheEcartPru(pts, ligne) {
       : devise !== 'EUR' ? 'Calculé en euros, change compris (comme DEGIRO) : coût au taux de change de chaque achat, valeur au taux du jour. ' : '')
     + 'Chaque achat (▲) déplace le PRU, donc l’écart.';
 }
+/* BARRES BRUT / NET (onglet Revenus) : pour chaque période, une barre claire et large pour le brut et, par-dessus, une barre
+   foncée et étroite pour le net (frais ou impôt déduits), sur la même ligne de base ; bleu pour un gain, rouge pour une perte.
+   items : [{ lib, brut, net, bulle }]. */
+const Fn_TeinteClaire = c => 'color-mix(in oklab, ' + c + ' 38%, var(--surface))';
+function Fn_BarresBrutNet(zone, items, o) {
+  zone.innerHTML = '';
+  if (!items.length) return false;
+  const W = zone.clientWidth || 340, H = o.H || 200, g = 58, d = 6, h = 10, b = 22;
+  const vs = [0].concat(...items.map(x => [x.brut, x.net]));
+  const pas = Fn_PasRond((Math.max(...vs) - Math.min(...vs)) || 100);
+  const vMin = Math.floor(Math.min(...vs) / pas) * pas, vMax = Math.max(vMin + pas, Math.ceil(Math.max(...vs) / pas) * pas);
+  const Y = v => h + (H - h - b) * (1 - (v - vMin) / (vMax - vMin));
+  const bande = (W - g - d) / items.length, larg = Math.min(36, bande * 0.72), etroit = larg * 0.45;
+  const svg = El('svg', { viewBox: '0 0 ' + W + ' ' + H, height: H, role: 'img', 'aria-label': o.titre || '' }, zone);
+  for (let v = vMin; v <= vMax + pas / 1000; v += pas) {
+    El('line', { x1: g, x2: W - d, y1: Y(v), y2: Y(v), stroke: Math.abs(v) < pas / 1000 ? 'var(--axe)' : 'var(--grille)', 'stroke-width': Math.abs(v) < pas / 1000 ? 1.5 : 1 }, svg);
+    Txt({ x: g - 6, y: Y(v) + 4, 'text-anchor': 'end', class: 'axe-txt' }, (v > 0 ? '+' : '') + Fmt_Nb(Math.round(v), 0) + ' €', svg);
+  }
+  const coul = v => v >= 0 ? 'var(--gain)' : 'var(--perte)', saut = Math.ceil((Math.max(...items.map(x => String(x.lib).length)) * 7 + 6) / bande);
+  items.forEach((x, i) => {
+    const cx = g + bande * (i + 0.5), barre = (v, l, fond) => { if (Math.abs(Y(v) - Y(0)) < 0.5) return;
+      El('rect', { x: cx - l / 2, y: Math.min(Y(0), Y(v)), width: l, height: Math.abs(Y(v) - Y(0)), rx: 2, style: 'fill:' + fond }, svg); };
+    barre(x.brut, larg, Fn_TeinteClaire(coul(x.brut)));
+    barre(x.net, etroit, coul(x.net));
+    if (i % saut === 0) Txt({ x: cx, y: H - 6, 'text-anchor': 'middle', class: 'axe-txt' }, x.lib, svg);
+  });
+  const bulle = Fn_Bulle(zone);
+  items.forEach((x, i) => {
+    const r = El('rect', { x: g + bande * i, y: 0, width: bande, height: H - b, fill: 'transparent' }, svg);
+    const montrer = () => bulle.montrer(x.bulle, g + bande * (i + 0.5), Math.min(Y(0), Y(x.brut), Y(x.net)), Math.max(Y(0), Y(x.brut), Y(x.net)));
+    r.addEventListener('pointerenter', montrer); r.addEventListener('pointerdown', montrer); r.addEventListener('pointerleave', () => bulle.cacher());
+  });
+  return true;
+}
+/* ONGLET REVENUS : plus-values réalisées des lignes fermées (toutes les années, ou les mois d'une année) et dividendes. */
+const Cst_MoisCourts = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
+const Cst_MoisLongs = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
+let Var_PvAnnee = null;   // null : toutes les années ; sinon « 2021 » : ses mois
+function Fn_RendreRevenus() {
+  const mv = Fn_Mouvements();
+  if (!mv.length) {
+    $('t-pv').innerHTML = '<div class="note note-warn">Importez le relevé de compte (onglet Relevé) : plus-values réalisées et dividendes en viennent.</div>';
+    ['g-pv', 'l-pv', 'b-pv-annees', 'g-div', 'l-div', 't-div'].forEach(id => { $(id).innerHTML = ''; });
+    return;
+  }
+  const liens = Fn_Liens(), ferm = Fn_LignesFermees(mv, Var_Etat.corrections, liens).filter(f => !f.sansAchat);
+  const somme = l => l.reduce((s, f) => ({ n: s.n + 1, brut: s.brut + f.brut, frais: s.frais + f.frais, net: s.net + f.net }), { n: 0, brut: 0, frais: 0, net: 0 });
+  const bulle = (titre, s) => '<b>' + titre + '</b><br>' + s.n + ' ligne(s) fermée(s)<br>Brut ' + Fmt_Signe(s.brut) + ' · frais ' + Fmt_Eur(s.frais) + '<br><b>Net ' + Fmt_Signe(s.net) + '</b>';
+  const ans = [...new Set(ferm.map(f => f.fin.slice(0, 4)))].sort();
+  if (Var_PvAnnee && !ans.includes(Var_PvAnnee)) Var_PvAnnee = null;
+  $('b-pv-annees').innerHTML = [''].concat(ans).map(a => '<button type="button" data-a="' + a + '" aria-pressed="' + ((a || null) === Var_PvAnnee) + '">' + (a || 'Par année') + '</button>').join('');
+  document.querySelectorAll('#b-pv-annees button').forEach(b => { b.onclick = () => { Var_PvAnnee = b.dataset.a || null; Fn_RendreRevenus(); }; });
+  $('l-pv').innerHTML = '<span><i style="background:' + Fn_TeinteClaire('var(--gain)') + '"></i>Brut</span><span><i style="background:var(--gain)"></i>Net, frais déduits</span>'
+    + '<span><i style="background:var(--perte)"></i>Perte</span>';
+  const cellules = s => '<td class="' + Cls_Signe(s.brut) + '">' + Fmt_Signe(s.brut) + '</td><td>' + Fmt_Eur(s.frais) + '</td><td class="' + Cls_Signe(s.net) + '"><b>' + Fmt_Signe(s.net) + '</b></td>';
+  const entete = premier => '<div class="defile"><table><thead><tr><th>' + premier + '</th><th>Brut</th><th>Frais</th><th>Net</th></tr></thead><tbody>';
+  if (!ferm.length) { $('g-pv').innerHTML = ''; $('t-pv').innerHTML = '<div class="muet" style="margin-top:8px">Aucune ligne entièrement vendue dans le relevé.</div>'; }
+  else if (!Var_PvAnnee) {
+    Fn_BarresBrutNet($('g-pv'), ans.map(a => { const s = somme(ferm.filter(f => f.fin.startsWith(a))); return { lib: a, brut: s.brut, net: s.net, bulle: bulle(a, s) }; }),
+      { H: 200, titre: 'Plus-values réalisées par année, brut et net' });
+    $('t-pv').innerHTML = entete('Année') + ans.map(a => { const s = somme(ferm.filter(f => f.fin.startsWith(a)));
+      return '<tr data-a="' + a + '" style="cursor:pointer"><td>' + a + '<div class="muet">' + s.n + ' ligne(s) ›</div></td>' + cellules(s) + '</tr>'; }).join('')
+      + '<tr><td><b>Total</b></td>' + cellules(somme(ferm)) + '</tr></tbody></table></div><div class="muet">Touchez une année pour voir ses mois et chaque ligne fermée.</div>';
+    document.querySelectorAll('#t-pv tr[data-a]').forEach(tr => { tr.onclick = () => { Var_PvAnnee = tr.dataset.a; Fn_RendreRevenus(); }; });
+  } else {
+    const deLAnnee = ferm.filter(f => f.fin.startsWith(Var_PvAnnee));
+    Fn_BarresBrutNet($('g-pv'), Cst_MoisCourts.map((m, k) => { const s = somme(deLAnnee.filter(f => f.fin.slice(5, 7) === String(k + 1).padStart(2, '0')));
+      return { lib: m, brut: s.brut, net: s.net, bulle: bulle(Cst_MoisLongs[k] + ' ' + Var_PvAnnee, s) }; }), { H: 200, titre: 'Plus-values réalisées par mois en ' + Var_PvAnnee });
+    const vente = v => '<tr><td>' + Fmt_Jour(v.date) + '</td><td>' + Fmt_Nb(v.qte, 0) + '</td><td>' + Fmt_Nb(v.prix, 3) + ' ' + Fn_Esc(Cst_SymboleDev[v.dev] || v.dev) + '</td><td>'
+      + (v.pru != null ? Fmt_Nb(v.pru, 3) : '—') + '</td><td class="' + Cls_Signe(v.pv) + '">' + (v.pv != null ? Fmt_Signe(v.pv) : '—') + '</td></tr>';
+    const ligne = f => '<details style="margin:4px 0"><summary>' + Fn_Esc(Fn_NomTitre(f.isin)) + ' · <span class="' + Cls_Signe(f.net) + '">' + Fmt_Signe(f.net) + '</span> net'
+      + ' <span class="muet">(' + Fmt_Jour(f.debut) + ' → ' + Fmt_Jour(f.fin) + ')</span></summary><div class="muet">Brut ' + Fmt_Signe(f.brut) + ' · frais ' + Fmt_Eur(f.frais, 2)
+      + ' · ' + f.achats + ' achat(s), ' + f.ventes.length + ' vente(s)' + (f.approx ? ' · change approximatif' : '') + '</div>'
+      + '<div class="defile"><table><thead><tr><th>Vente</th><th>Qté</th><th>Prix</th><th>PRU</th><th>Plus-value</th></tr></thead><tbody>' + f.ventes.map(vente).join('') + '</tbody></table></div></details>';
+    const mois = [...new Set(deLAnnee.map(f => f.fin.slice(5, 7)))].sort();
+    $('t-pv').innerHTML = entete('Mois') + mois.map(m => { const s = somme(deLAnnee.filter(f => f.fin.slice(5, 7) === m));
+      return '<tr><td>' + Cst_MoisLongs[Number(m) - 1] + '<div class="muet">' + s.n + ' ligne(s)</div></td>' + cellules(s) + '</tr>'; }).join('')
+      + '<tr><td><b>' + Var_PvAnnee + '</b></td>' + cellules(somme(deLAnnee)) + '</tr></tbody></table></div>'
+      + mois.map(m => '<h3 style="font-size:14px;margin:12px 0 4px">' + Cst_MoisLongs[Number(m) - 1] + ' ' + Var_PvAnnee + '</h3>' + deLAnnee.filter(f => f.fin.slice(5, 7) === m).map(ligne).join('')).join('');
+  }
+  // Dividendes : par année (graphique et tableau), puis par action.
+  const div = Fn_DividendesParAn(mv, Var_Etat.corrections, liens), ansD = [...new Set([].concat(...Object.values(div).map(Object.keys)))].sort();
+  const tot = a => Object.values(div).reduce((s, p) => p[a] ? { brut: s.brut + p[a].brut, impot: s.impot + p[a].impot } : s, { brut: 0, impot: 0 });
+  $('l-div').innerHTML = '<span><i style="background:' + Fn_TeinteClaire('var(--gain)') + '"></i>Brut</span><span><i style="background:var(--gain)"></i>Net, après l’impôt retenu à la source</span>';
+  if (!ansD.length) { $('g-div').innerHTML = ''; $('t-div').innerHTML = '<div class="muet">Aucun dividende dans le relevé.</div>'; return; }
+  Fn_BarresBrutNet($('g-div'), ansD.map(a => { const t = tot(a); return { lib: a, brut: t.brut, net: t.brut + t.impot,
+    bulle: '<b>' + a + '</b><br>Brut ' + Fmt_Eur(t.brut, 2) + ' · impôt ' + Fmt_Eur(t.impot, 2) + '<br><b>Net ' + Fmt_Eur(t.brut + t.impot, 2) + '</b>' }; }), { H: 180, titre: 'Dividendes par année, brut et net' });
+  const actions = Object.keys(div).map(i => ({ i, net: Object.values(div[i]).reduce((s, x) => s + x.brut + x.impot, 0) })).sort((x, y) => y.net - x.net);
+  const totalNet = actions.reduce((s, x) => s + x.net, 0);
+  $('t-div').innerHTML = '<div class="defile"><table><thead><tr><th>Année</th><th>Brut</th><th>Impôt</th><th>Net</th></tr></thead><tbody>'
+    + ansD.map(a => { const t = tot(a); return '<tr><td>' + a + '</td><td>' + Fmt_Eur(t.brut) + '</td><td>' + Fmt_Eur(t.impot) + '</td><td><b>' + Fmt_Eur(t.brut + t.impot) + '</b></td></tr>'; }).join('')
+    + '</tbody></table></div><h3 style="font-size:14px;margin:12px 0 4px">Par action (net)</h3><div class="defile"><table class="gauche-1"><thead><tr><th>Action</th>'
+    + ansD.map(a => '<th>' + a + '</th>').join('') + '<th>Total</th></tr></thead><tbody>'
+    + actions.map(x => '<tr><td>' + Fn_Esc(x.i === '—' ? 'Sans ISIN' : Fn_NomTitre(x.i)) + '</td>' + ansD.map(a => '<td>' + (div[x.i][a] ? Fmt_Eur(div[x.i][a].brut + div[x.i][a].impot) : '<span class="muet">—</span>') + '</td>').join('')
+      + '<td><b>' + Fmt_Eur(x.net) + '</b></td></tr>').join('')
+    + '<tr><td><b>Total</b></td>' + ansD.map(a => { const t = tot(a); return '<td><b>' + Fmt_Eur(t.brut + t.impot) + '</b></td>'; }).join('') + '<td><b>' + Fmt_Eur(totalNet) + '</b></td></tr></tbody></table></div>';
+}
 /* ÉCART AU PRU DE TOUTES LES LIGNES SUR UN SEUL GRAPHIQUE, une courbe par ligne sur l'axe du temps. Échelle LOGARITHMIQUE
    graduée en % : ×2 (+100 %) et ÷2 (−50 %) sont à la même distance de 0 — sans elle, une ligne qui a décuplé écraserait
    toutes les autres en un trait plat. Une teinte par ligne ne se distinguerait plus au-delà de quelques lignes : la couleur dit l'écart d'aujourd'hui (bleu en
@@ -2046,7 +2213,9 @@ function Fn_RendreStatsCours(pts, pos, ops, ligne) {
     + (toutesOps.length ? '<details><summary>' + toutesOps.length + ' achat(s) et vente(s) dans le relevé' + (toutesOps.some(o => o.ost) ? ', opérations sur titres comprises' : '') + '</summary><div class="defile"><table><thead><tr><th>Date</th><th>Opération</th><th>Qté</th><th>Prix</th>' + (apres ? '<th>PRU après</th>' : '') + '</tr></thead><tbody>'
       + toutesOps.map((o, k) => [o, k]).reverse().map(([o, k]) => '<tr><td>' + Fmt_Jour(o.date) + '</td><td>' + (o.type === 'achat' ? '▲ achat' : '▼ vente') + (o.ost ? '<div class="muet">' + Fn_Esc(o.ost) + (o.herite ? ' (ancien ISIN)' : '') + '</div>' : '') + '</td><td>' + Fmt_Nb(o.qte, 0) + '</td><td>' + Fmt_Nb(o.prix, 3) + ' ' + Fn_Esc(Cst_DevSymbole[o.dev] || o.dev) + '</td>'
       + (apres ? '<td>' + (apres[k].pru != null ? Fmt_Nb(apres[k].pru, 3) : '<span class="muet">soldée</span>') + '</td>' : '') + '</tr>').join('')
-      + '</tbody></table></div></details>' : '');
+      + '</tbody></table></div></details>' : '')
+    + Fn_HtmlAvis(isin);
+  $('cours-stats').querySelectorAll('.voir-analyse').forEach(l => { l.onclick = e => { e.preventDefault(); Fn_Onglet('analyse'); }; });
 }
 /* CORRESPONDANCE DEGIRO → YAHOO de toutes les actions, détenues et vendues : le symbole retenu par le robot et le nom de la
    société chez Yahoo, pour vérifier d'un coup d'œil ; une case pour imposer un autre symbole (le robot ne contrôle alors que la
@@ -2227,7 +2396,9 @@ function Fn_DemandeApp(k, sansTete) {
       + 'a) synthèse en cinq à huit lignes ;\nb) alertes, de la plus importante à la moins importante ;\n'
       + 'c) tableau : ligne · poids · plus-value · valorisation · consensus · ton avis ;\nd) les fiches ;\ne) le portefeuille entier, puis les idées nouvelles ;\n'
       + 'f) calendrier des trois prochains mois : résultats, assemblées générales, détachements de dividende ;\ng) sources : titre, site, date, lien.\n'
-      + (sansTete ? 'Rédige le rapport complet en une seule réponse, en Markdown (titres ##, listes, tableaux) : personne ne pourra te demander la suite.'
+      + (sansTete ? 'Rédige le rapport complet en une seule réponse, en Markdown (titres ##, listes, tableaux) : personne ne pourra te demander la suite.\n'
+          + 'h) Tout à la fin, après les sources, un bloc ```json et rien après : une liste avec une entrée par ligne DÉTENUE, '
+          + '{"isin": "…", "avis": "renforcer" | "conserver" | "alleger" | "vendre" | "surveiller", "raison": "une phrase"} — les mêmes avis que dans tes fiches.'
         : 'Si tout ne tient pas dans une réponse, arrête-toi après une fiche complète et termine par : « Écris “continue” pour la suite. »'),
     '6. RÈGLES : chaque chiffre et chaque fait avec sa source et sa date ; des informations récentes, et signale celles qui datent ; '
       + 'sépare les faits, l’avis des analystes et ton propre avis ; si une information manque ou si les sources se contredisent, dis-le, n’invente rien ; '
@@ -2261,6 +2432,24 @@ async function Fn_AnalyseApp() {
 const Cst_Marked = 'https://cdn.jsdelivr.net/npm/marked@12.0.2/+esm', Cst_Purify = 'https://cdn.jsdelivr.net/npm/dompurify@3.1.6/+esm';
 const Cst_AttenteMaxMin = 55;   // le robot s'arrête de lui-même au bout de 50 min
 let Var_AttenteRobot = null;
+/* AVIS DE CLAUDE PAR LIGNE : le rapport se termine par un bloc ```json [{ isin, avis, raison }] (consigne h). Lu à part, ôté du
+   rapport affiché, et montré en bas de l'onglet Détail de la ligne si l'analyse a moins de 4 jours. */
+const Cst_Avis = { renforcer: 'Renforcer', conserver: 'Conserver', alleger: 'Alléger', vendre: 'Vendre', surveiller: 'Surveiller' };
+function Fn_AvisAnalyse(r) {
+  const t = String((r && r.texte) || '').trim(), m = /```json\s*(\[[\s\S]*?\])\s*```\s*$/.exec(t);
+  if (!m) return { avis: [], texte: t };
+  let l = null; try { l = JSON.parse(m[1]); } catch (e) { l = null; }
+  const norme = a => String(a || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  const avis = Array.isArray(l) ? l.filter(x => x && typeof x.isin === 'string' && Cst_Avis[norme(x.avis)]).map(x => ({ isin: x.isin, avis: norme(x.avis), raison: String(x.raison || '') })) : [];
+  return { avis, texte: avis.length ? t.slice(0, m.index).trim() : t };
+}
+function Fn_HtmlAvis(isin) {
+  const r = ((Var_Etat.analyseRobot || {}).derniers || []).find(x => x.ok);
+  if (!r || Date.now() - r.ts_demande > 4 * 86400000) return '';
+  const a = Fn_AvisAnalyse(r).avis.find(x => x.isin === isin);
+  return a ? '<div class="note" style="margin-top:12px"><b>Avis de Claude</b> <span class="muet">(analyse du ' + Fmt_DateHeure(r.ts_demande) + ')</span> : <b>' + Cst_Avis[a.avis] + '</b> — '
+    + Fn_Esc(a.raison) + ' <a href="#" class="voir-analyse">Lire l’analyse complète</a></div>' : '';
+}
 // Avant de lancer : une seule analyse à la fois (bouton grisé pendant), et un avertissement sur le quota de l'abonnement,
 // que le robot ne peut pas lire à l'avance (Claude Code ne le donne pas en mode sans fenêtre) : il voit seulement s'il est épuisé.
 function Fn_LancerAnalyseRobot() {
@@ -2325,8 +2514,9 @@ async function Fn_RendreAnalyseRobot() {
   const entete = echec + '<div class="muet" style="margin-top:8px">Analyse complète du ' + Fmt_DateHeure(r.ts_demande) + ' · '
     + Fn_Esc((Cst_Modeles[r.modele] || { nom: r.modele }).nom) + ' · ' + Math.max(1, Math.round(r.duree_s / 60)) + ' min · sur votre abonnement Claude</div>';
   let html;
-  try { const [m, p] = await Promise.all([import(Cst_Marked), import(Cst_Purify)]); html = p.default.sanitize(m.marked.parse(r.texte), { FORBID_TAGS: ['img', 'form', 'input', 'button', 'style'] }); }
-  catch (e) { html = '<div style="white-space:pre-wrap">' + Fn_Esc(r.texte) + '</div>'; }   // modules injoignables : texte brut
+  const texte = Fn_AvisAnalyse(r).texte;   // sans le bloc des avis, lu à part (onglet Détail)
+  try { const [m, p] = await Promise.all([import(Cst_Marked), import(Cst_Purify)]); html = p.default.sanitize(m.marked.parse(texte), { FORBID_TAGS: ['img', 'form', 'input', 'button', 'style'] }); }
+  catch (e) { html = '<div style="white-space:pre-wrap">' + Fn_Esc(texte) + '</div>'; }   // modules injoignables : texte brut
   zone.innerHTML = entete + html;
   zone.querySelectorAll('a[href]').forEach(l => { l.target = '_blank'; l.rel = 'noopener noreferrer'; });
   zone.querySelectorAll('table').forEach(t => { const d = document.createElement('div'); d.className = 'defile'; t.replaceWith(d); d.appendChild(t); });
