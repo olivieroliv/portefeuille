@@ -83,6 +83,7 @@ details summary { cursor: pointer; color: var(--encre-2); font-size: 13.5px; mar
 .choix button { padding: 4px 9px; font-size: 13px; }
 .choix button[aria-pressed="true"] { background: var(--serie-1); color: #fff; border-color: transparent; }
 .choix button:disabled { opacity: 0.4; cursor: default; }
+button.accent:disabled { background: var(--surface-2); color: var(--muet); cursor: default; }
 .ind { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: 8px 0; border-bottom: 1px solid var(--grille); }
 .ind .nom { font-weight: 600; font-size: 14px; }
 .ind .val { font-weight: 600; text-align: right; white-space: nowrap; }
@@ -108,6 +109,7 @@ input[type="number"] { width: 70px; }
 select { max-width: 100%; }
 .multiples { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px 16px; margin-top: 8px; }
 .multiple .nom { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lien-detail { display: block; width: 100%; text-align: left; font: inherit; font-size: 13px; color: var(--serie-1); background: none; border: 0; padding: 0; cursor: pointer; }
 .puces { display: flex; flex-wrap: wrap; gap: 2px 4px; margin: 6px 0 4px; }
 .puce { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 12.5px; color: var(--encre-2); background: none; border: 1px solid transparent;
   border-radius: 6px; padding: 3px 6px; cursor: pointer; font-variant-numeric: tabular-nums; }
@@ -201,6 +203,7 @@ table.gauche th, table.gauche td { text-align: left; }
     <div class="graphe" id="g-cours"></div>
     <div id="bloc-ecart">
       <h2 style="margin-top:12px">Écart du cours à votre PRU</h2>
+      <div class="choix" id="b-ecart-unite" role="group" aria-label="Unité de l’écart"></div>
       <div class="muet" id="ecart-sous"></div>
       <div class="graphe" id="g-ecart"></div>
     </div>
@@ -1489,7 +1492,7 @@ const Lire_Local = k => { try { return localStorage.getItem(k) || ''; } catch (e
 const Ecrire_Local = (k, v) => { try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); return true; } catch (e) { return false; } };
 const Fn_Reglages = () => Object.assign({ depot: 'olivieroliv/portefeuille-cours', modele: 'claude-opus-5-5', effort: 'medium' }, Var_Etat.reglages || {});
 let Var_Cours = { sha: null, index: null, series: {}, minute: {}, maj: null, erreur: null, enCours: false };
-let Var_Vue = { isin: null, periode: '1A', resolution: 'jour' };
+let Var_Vue = { isin: null, periode: '1A', resolution: 'jour', ecartUnite: 'pct' };
 
 function Fn_Idb() { return new Promise((ok, ko) => { try { const r = indexedDB.open('portefeuille', 1); r.onupgradeneeded = () => r.result.createObjectStore('fichiers'); r.onsuccess = () => ok(r.result); r.onerror = () => ko(r.error); } catch (e) { ko(e); } }); }
 async function Fn_IdbLire(cle) { try { const db = await Fn_Idb(); return await new Promise((ok, ko) => { const r = db.transaction('fichiers').objectStore('fichiers').get(cle); r.onsuccess = () => ok(r.result); r.onerror = () => ko(r.error); }); } catch (e) { return null; } }
@@ -1514,6 +1517,7 @@ async function Fn_GhFichier(chemin, ref) {
 const Fn_Base64 = s => { const o = new TextEncoder().encode(s); let b = ''; for (let i = 0; i < o.length; i += 0x8000) b += String.fromCharCode.apply(null, o.subarray(i, i + 0x8000)); return btoa(b); };
 const Fn_DeBase64 = b => new TextDecoder().decode(Uint8Array.from(atob(String(b).replace(/\s/g, '')), c => c.charCodeAt(0)));
 const Cst_DevSymbole = { '€': 'EUR', '$': 'USD', '£': 'GBP' };
+const Cst_SymboleDev = { EUR: '€', USD: '$', GBP: '£' };   // code → symbole (GBX, CHF… gardent leur code)
 
 // Titres pour le robot : ceux détenus (dernière capture) et ceux d'avant (achats et ventes du relevé), avec la date du premier achat.
 function Fn_ListeSymboles() {
@@ -1804,8 +1808,8 @@ function Fn_CourbePct(zone, vals, o) {
     const pas = Fn_PasRond(vMax - vMin);
     for (let v = Math.ceil(vMin / pas) * pas; v <= vMax; v += pas)
       if (Math.abs(v) > pas / 1000) { El('line', { x1: g, x2: W - d, y1: Y(v), y2: Y(v), stroke: 'var(--grille)', 'stroke-width': 1 }, svg);
-        Txt({ x: g - 6, y: Y(v) + 4, 'text-anchor': 'end', class: 'axe-txt' }, (v > 0 ? '+' : '') + Fmt_Nb(v, 0) + ' %', svg); }
-    Txt({ x: g - 6, y: Y(0) + 4, 'text-anchor': 'end', class: 'axe-txt' }, '0 %', svg);
+        Txt({ x: g - 6, y: Y(v) + 4, 'text-anchor': 'end', class: 'axe-txt' }, o.fmt ? o.fmt(v) : (v > 0 ? '+' : '') + Fmt_Nb(v, 0) + ' %', svg); }
+    Txt({ x: g - 6, y: Y(0) + 4, 'text-anchor': 'end', class: 'axe-txt' }, o.fmt ? o.fmt(0) : '0 %', svg);
     (o.etiquettes || []).forEach(([i, txt], k, l) => Txt({ x: X(i), y: H - 5, 'text-anchor': k === 0 ? 'start' : k === l.length - 1 ? 'end' : 'middle', class: 'axe-txt' }, txt, svg));
   }
   const y0 = Y(0);
@@ -1827,7 +1831,7 @@ function Fn_CourbePct(zone, vals, o) {
   (o.marques || []).forEach(i => { if (vals[i] == null) return; const x = X(i), y = Y(vals[i]);
     El('path', { d: 'M' + x + ',' + (y + 2) + 'l-4,7h8z', fill: 'var(--encre)', stroke: 'var(--surface)', 'stroke-width': 1 }, svg); });
   let der = vals.length - 1; while (der > 0 && vals[der] == null) der--;
-  if (o.axes && vals[der] != null) Txt({ x: X(der) - 4, y: Y(vals[der]) + (vals[der] >= 0 ? -6 : 14), 'text-anchor': 'end', class: 'fort' }, Fmt_Pct(vals[der], 1, true), svg);
+  if (o.axes && vals[der] != null) Txt({ x: X(der) - 4, y: Y(vals[der]) + (vals[der] >= 0 ? -6 : 14), 'text-anchor': 'end', class: 'fort' }, o.fmt ? o.fmt(vals[der]) : Fmt_Pct(vals[der], 1, true), svg);
   if (o.bulle) {
     const bulle = Fn_Bulle(zone);
     const ret = El('line', { y1: h, y2: H - b, stroke: 'var(--axe)', 'stroke-width': 1, visibility: 'hidden' }, svg);
@@ -1844,22 +1848,31 @@ function Fn_CourbePct(zone, vals, o) {
   return true;
 }
 /* ÉCART DU COURS AU PRU d'une ligne dans le temps (carte Cours par action), en %, en euros change compris. */
+/* En % (en euros, change compris, comme DEGIRO) ou en devise : cours − PRU par action, dans la devise de cotation
+   (« +45,30 € » pour Air Liquide, « −41,64 $ » pour Adobe). */
 function Fn_GrapheEcartPru(pts, ligne) {
   const bloc = $('bloc-ecart'), zone = $('g-ecart'), s = Fn_Serie(Var_Vue.isin), fx = Fn_Fx();
-  const devise = (s && s.devise) || 'EUR';
+  const devise = (s && s.devise) || 'EUR', enDevise = Var_Vue.ecartUnite === 'dev', sym = Cst_SymboleDev[devise] || devise;
   const etats = pts && ligne && Var_Vue.resolution === 'jour' ? pts.map(p => Fn_EtatAu(ligne, p.jour)) : [];
-  const vals = etats.map((e, i) => Fn_EcartPru(e, pts[i].v, devise, fx, pts[i].jour));
-  const n = pts ? pts.length - 1 : 0;
+  const pcts = etats.map((e, i) => Fn_EcartPru(e, pts[i].v, devise, fx, pts[i].jour));
+  const montants = etats.map((e, i) => e && e.qte && e.pru > 0 ? pts[i].v - e.pru : null);
+  const vals = enDevise ? montants : pcts, n = pts ? pts.length - 1 : 0;
+  const fmtDev = v => (v > 0 ? '+' : v < 0 ? '−' : '') + Fmt_Nb(Math.abs(v), Math.abs(v) < 10 ? 2 : Math.abs(v) < 100 ? 1 : 0) + ' ' + sym;
+  $('b-ecart-unite').innerHTML = [['pct', '%'], ['dev', sym]].map(([u, l]) => '<button type="button" data-u="' + u + '" aria-pressed="' + (Var_Vue.ecartUnite === u) + '">' + Fn_Esc(l) + '</button>').join('');
+  document.querySelectorAll('#b-ecart-unite [data-u]').forEach(b => { b.onclick = () => { Var_Vue.ecartUnite = b.dataset.u; Fn_GrapheEcartPru(pts, ligne); }; });
   bloc.classList.remove('cache');   // affiché avant d'être dessiné : caché, il n'aurait pas de largeur
-  const ok = vals.length > 1 && Fn_CourbePct(zone, vals, { H: 150, axes: true, id: 'ecart', titre: 'Écart de la ligne à son PRU, en pourcentage',
+  const ok = vals.length > 1 && Fn_CourbePct(zone, vals, { H: 150, axes: true, id: 'ecart', titre: enDevise ? 'Écart du cours au PRU, en ' + devise + ' par action' : 'Écart de la ligne à son PRU, en pourcentage',
+    fmt: enDevise ? fmtDev : null,
     etiquettes: (zone.clientWidth < 420 ? [0, n] : [0, Math.floor(n / 2), n]).map(i => [i, pts[i].etiquette]),
     marques: ligne ? ligne.ops.filter(op => op.type === 'achat').map(op => Fn_RangAu(pts.map(p => p.jour), op.date)).filter(i => i >= 0 && pts[i].jour >= ligne.ops[0].date) : [],
     bulle: i => '<b>' + Fn_Esc(pts[i].etiquette) + '</b><br>' + (vals[i] == null ? 'Ligne non détenue ce jour-là'
-      : 'Écart ' + Fmt_Pct(vals[i], 1, true) + (devise !== 'EUR' ? ' en euros' : '') + '<br>Cours ' + Fmt_Nb(pts[i].v, 3) + ' ' + Fn_Esc(devise) + ' · PRU ' + Fmt_Nb(etats[i].pru, 3)
+      : 'Écart ' + (pcts[i] != null ? Fmt_Pct(pcts[i], 1, true) + (devise !== 'EUR' ? ' en euros' : '') : '') + (montants[i] != null ? ' · ' + fmtDev(montants[i]) + ' par action' : '')
+        + '<br>Cours ' + Fmt_Nb(pts[i].v, 3) + ' ' + Fn_Esc(devise) + ' · PRU ' + Fmt_Nb(etats[i].pru, 3)
         + (devise !== 'EUR' && etats[i].pruEur ? ' (' + Fmt_Nb(etats[i].pruEur, 3) + ' €)' : '')) });
   bloc.classList.toggle('cache', !ok);
   if (ok) $('ecart-sous').textContent = 'Au-dessus de 0, la ligne vaut plus que ce qu’elle vous a coûté : elle est en gain ; en dessous, en perte. '
-    + (devise !== 'EUR' ? 'Calculé en euros, change compris (comme DEGIRO) : coût au taux de change de chaque achat, valeur au taux du jour. ' : '')
+    + (enDevise ? 'En ' + devise + ' : cours moins PRU, par action, dans la devise de cotation' + (devise !== 'EUR' ? ', sans l’effet du change' : '') + '. '
+      : devise !== 'EUR' ? 'Calculé en euros, change compris (comme DEGIRO) : coût au taux de change de chaque achat, valeur au taux du jour. ' : '')
     + 'Chaque achat (▲) déplace le PRU, donc l’écart.';
 }
 /* ÉCART AU PRU DE TOUTES LES LIGNES SUR UN SEUL GRAPHIQUE, une courbe par ligne sur l'axe du temps. Échelle LOGARITHMIQUE
@@ -1965,11 +1978,13 @@ function Fn_RendreEcarts(c) {
   if (!cartes.length) { zone.innerHTML = ''; return; }
   cartes.sort((a, b) => b.actuel - a.actuel);
   Fn_GrapheEcartsTous(cartes);
-  zone.innerHTML = cartes.map((x, k) => '<div class="multiple"><div class="nom" title="' + Fn_Esc(x.p.nom) + '">' + Fn_Esc(x.p.nom) + '</div>'
+  // Toucher le nom d'une ligne ouvre son détail (cours, écart au PRU, achats et ventes).
+  zone.innerHTML = cartes.map((x, k) => '<div class="multiple"><button type="button" class="nom lien-detail" data-isin="' + Fn_Esc(x.p.isin) + '" title="Ouvrir le détail de ' + Fn_Esc(x.p.nom) + '">' + Fn_Esc(x.p.nom) + ' ›</button>'
     + '<div class="val ' + Cls_Signe(x.actuel) + '">' + Fmt_Pct(x.actuel, 1, true) + '</div><div class="muet" style="font-size:11.5px">depuis le ' + Fmt_Jour(x.jours[0]) + '</div>'
     + '<div class="graphe" id="g-ecart-' + k + '"></div></div>').join('');
   cartes.forEach((x, k) => Fn_CourbePct($('g-ecart-' + k), x.vals, { H: 64, axes: false, id: 'ec' + k, marques: x.marques, titre: 'Écart au PRU de ' + x.p.nom,
     bulle: i => '<b>' + Fn_Esc(x.p.nom) + '</b><br>' + Fmt_Jour(x.jours[i]) + ' : ' + (x.vals[i] == null ? 'non détenue' : Fmt_Pct(x.vals[i], 1, true)) }));
+  zone.querySelectorAll('.lien-detail').forEach(b => { b.onclick = () => { Var_Vue.isin = b.dataset.isin; Fn_Onglet('detail'); }; });
 }
 /* GAIN SUR L'ARGENT VERSÉ dans le temps : (valeur du compte − versements nets) ÷ versements nets. Un versement le fait
    baisser sans qu'il y ait de perte (l'argent neuf n'a encore rien gagné) ; le XIRR, lui, en tient compte. */
@@ -2246,10 +2261,23 @@ async function Fn_AnalyseApp() {
 const Cst_Marked = 'https://cdn.jsdelivr.net/npm/marked@12.0.2/+esm', Cst_Purify = 'https://cdn.jsdelivr.net/npm/dompurify@3.1.6/+esm';
 const Cst_AttenteMaxMin = 55;   // le robot s'arrête de lui-même au bout de 50 min
 let Var_AttenteRobot = null;
-async function Fn_LancerAnalyseRobot() {
+// Avant de lancer : une seule analyse à la fois (bouton grisé pendant), et un avertissement sur le quota de l'abonnement,
+// que le robot ne peut pas lire à l'avance (Claude Code ne le donne pas en mode sans fenêtre) : il voit seulement s'il est épuisé.
+function Fn_LancerAnalyseRobot() {
   const etat = $('analyse-robot-etat'), a = Var_Etat.analyseRobot || {};
   if (!Lire_Local(Cst_CleJeton)) { etat.innerHTML = '<div class="note note-warn">Il faut d’abord l’accès GitHub (onglet Réglages, rubrique Cours) : c’est lui qui porte la demande au robot.</div>'; return; }
-  if (a.attendu && Date.now() - a.attendu < Cst_AttenteMaxMin * 60000) { Fn_SuivreAnalyseRobot(); return; }
+  if (a.attendu && Date.now() - a.attendu < Cst_AttenteMaxMin * 60000) return;
+  const der = (a.derniers || []).find(x => x.ok);
+  etat.innerHTML = '<div class="note note-warn">Une analyse complète prend une grosse part de votre quota Claude de 5 heures'
+    + (der ? ' (la dernière : ' + Math.max(1, Math.round(der.duree_s / 60)) + ' min avec ' + Fn_Esc((Cst_Modeles[der.modele] || { nom: der.modele }).nom) + ')' : '')
+    + '. Si vous avez déjà beaucoup utilisé Claude aujourd’hui (app Claude → Paramètres → Utilisation), lancez-la plutôt demain ; Sonnet en consomme moins qu’Opus '
+    + '(onglet Réglages). Si votre quota est déjà épuisé, le robot s’en aperçoit et ne lance rien.'
+    + '<div class="rang"><button class="accent" id="b-robot-go">Lancer l’analyse</button><button id="b-robot-non">Annuler</button></div></div>';
+  $('b-robot-go').onclick = Fn_EnvoyerAnalyseRobot;
+  $('b-robot-non').onclick = () => Fn_RendreAnalyseRobot();
+}
+async function Fn_EnvoyerAnalyseRobot() {
+  const etat = $('analyse-robot-etat'), a = Var_Etat.analyseRobot || {};
   const ts = Date.now(), texte = Fn_DemandeApp(Fn_Calculs(), true);
   etat.innerHTML = '<div class="note">Envoi de la demande…</div>';
   try {
@@ -2270,7 +2298,7 @@ async function Fn_SuivreAnalyseRobot() {
   let r = null;
   try { r = await Fn_GhFichier('resultat.json', 'analyses'); } catch (e) { r = null; }
   if (r && r.ts_demande === a.attendu) {
-    a.attendu = null; a.derniers = [r].concat((a.derniers || []).filter(x => x.ts_demande !== r.ts_demande)).slice(0, 2);
+    a.attendu = null; a.derniers = [r].concat((a.derniers || []).filter(x => x.ts_demande !== r.ts_demande)).slice(0, 3);
   } else if (Date.now() - a.attendu > Cst_AttenteMaxMin * 60000) { a.attendu = null; a.perdu = true; }
   else Var_AttenteRobot = setTimeout(Fn_SuivreAnalyseRobot, 60000);
   Fn_Sauver(); Fn_RendreAnalyseRobot();
@@ -2281,11 +2309,21 @@ async function Fn_RendreAnalyseRobot() {
       + 'Le rapport s’affichera ici ; vous pouvez fermer la page en attendant.<div class="rang"><button id="b-analyse-verifier">Vérifier maintenant</button></div></div>'
     : a.perdu ? '<div class="note note-warn">Le robot n’a pas répondu. Voir l’onglet « Actions » du dépôt portefeuille-cours sur GitHub, puis relancer.</div>' : '';
   if ($('b-analyse-verifier')) $('b-analyse-verifier').onclick = Fn_SuivreAnalyseRobot;
-  const r = (a.derniers || [])[0];
-  if (!r) { zone.innerHTML = ''; return; }
-  const entete = '<div class="muet" style="margin-top:8px">Analyse complète du ' + Fmt_DateHeure(r.ts_demande) + ' · '
+  const bouton = $('b-analyse-robot');
+  bouton.disabled = !!a.attendu; bouton.textContent = a.attendu ? 'Analyse en cours…' : 'Analyse complète par Claude';
+  // Un échec (quota compris) est dit en tête ; le dernier rapport réussi reste affiché dessous.
+  const dernier = (a.derniers || [])[0], r = (a.derniers || []).find(x => x.ok);
+  let echec = '';
+  if (dernier && !dernier.ok && !a.attendu) {
+    const reprise = dernier.quota && dernier.quota.cinq_heures && dernier.quota.cinq_heures.reprise;
+    echec = dernier.quota_atteint
+      ? '<div class="note note-warn"><b>Analyse du ' + Fmt_DateHeure(dernier.ts_demande) + ' : ' + (/non lancée/.test(dernier.erreur) ? 'pas lancée' : 'pas allée au bout') + '.</b> '
+        + Fn_Esc(dernier.erreur) + ' ' + (reprise ? 'Relancez après le ' + Fmt_DateHeure(reprise) + '.' : 'Relancez dans quelques heures, ou demain.') + '</div>'
+      : '<div class="note note-crit">Analyse du ' + Fmt_DateHeure(dernier.ts_demande) + ' impossible : ' + Fn_Esc(dernier.erreur) + '</div>';
+  }
+  if (!r) { zone.innerHTML = echec; return; }
+  const entete = echec + '<div class="muet" style="margin-top:8px">Analyse complète du ' + Fmt_DateHeure(r.ts_demande) + ' · '
     + Fn_Esc((Cst_Modeles[r.modele] || { nom: r.modele }).nom) + ' · ' + Math.max(1, Math.round(r.duree_s / 60)) + ' min · sur votre abonnement Claude</div>';
-  if (!r.ok) { zone.innerHTML = entete + '<div class="note note-crit">Analyse impossible : ' + Fn_Esc(r.erreur) + '</div>'; return; }
   let html;
   try { const [m, p] = await Promise.all([import(Cst_Marked), import(Cst_Purify)]); html = p.default.sanitize(m.marked.parse(r.texte), { FORBID_TAGS: ['img', 'form', 'input', 'button', 'style'] }); }
   catch (e) { html = '<div style="white-space:pre-wrap">' + Fn_Esc(r.texte) + '</div>'; }   // modules injoignables : texte brut
