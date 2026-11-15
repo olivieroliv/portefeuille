@@ -44,6 +44,7 @@ h2 { font-size: 16px; margin: 0 0 4px; }
 .sous { color: var(--encre-2); font-size: 13px; }
 .muet { color: var(--muet); font-size: 12.5px; }
 .calcul { margin: 8px 0 4px; padding-left: 18px; } .calcul li { margin: 2px 0; }
+.marque-b { display: inline-block; font-size: 11px; font-weight: 700; line-height: 1; padding: 3px 5px; border-radius: 5px; border: 1px solid var(--bord); color: var(--encre-2); vertical-align: 2px; }
 .carte { background: var(--surface); border: 1px solid var(--bord); border-radius: 12px; padding: 14px; margin: 12px 0; }
 .heros-lib { color: var(--encre-2); font-size: 13px; }
 .heros { font-size: 48px; font-weight: 600; line-height: 1.1; margin: 2px 0 10px; }
@@ -216,6 +217,16 @@ table.gauche-1 th:first-child, table.gauche-1 td:first-child { text-align: left;
     <div class="muet" id="ecarts-tous-sous"></div>
     <div class="muet" style="margin-top:14px">Une ligne par graphique, chacune à sa propre échelle — bleu au-dessus de 0 : en gain · rouge en dessous : en perte · ▲ : un achat, qui déplace le PRU.</div>
     <div class="multiples" id="g-ecarts"></div>
+  </section>
+
+  <section class="carte cache" id="c-bourso" data-onglet="accueil">
+    <h2>Compte Bourso <span class="marque-b" title="BoursoBank">B</span></h2>
+    <div class="muet" id="bourso-sous"></div>
+    <div class="tuiles" id="bourso-tuiles"></div>
+    <div class="defile" id="t-bourso"></div>
+    <div id="bourso-mv"></div>
+    <div class="muet" style="margin-top:8px">Pour l’instant, ces lignes restent à part : elles ne comptent pas encore dans les totaux, l’historique ni les
+      indicateurs, qui ne portent que sur DEGIRO.</div>
   </section>
 
   <section class="carte" id="c-positions" data-onglet="accueil">
@@ -452,6 +463,67 @@ function Fn_Controle(cap) {
   const ecran = cap.marge.titres;
   return { somme, ecran, ecart: ecran != null ? somme - ecran : null,
     attendues: Number(cap.meta.lignes_positions) || null, lues: cap.positions.length };
+}
+/* CAPTURE BOURSO (macro « Smart - Bourso »). L'appli Bourso n'écrit son texte que dans les descriptions d'accessibilité ;
+   la macro lit l'écran pendant que l'utilisateur fait glisser la liste et garde chaque écran qui a changé, un par ligne,
+   au format JSON de MacroDroid ({lvjson=…} : { "clé" : "texte", … }). Document :
+   ===SMART-BOURSO v1 <secondes>=== / ===POSITIONS=== / écrans / ===MOUVEMENTS=== / écrans / ===FIN===
+   Une position : « NOM⏎MONTANT euros⏎COURS euros⏎±VAR⏎%⏎PRU euros⏎ / QTÉ », suivie de sa plus-value latente
+   (« 2491,35 euros ») ; l'en-tête donne l'évaluation des titres, le solde espèces et la plus-value latente totale.
+   Les nombres séparent les milliers par une espace fine insécable (U+202F). */
+const Cst_NbBourso = '[+\\-−]?\\d[\\d\\s\\u00a0\\u202f]*(?:,\\d+)?';
+const Cst_ReLigneBourso = new RegExp('^(.+)\\n(' + Cst_NbBourso + ') euros\\n(' + Cst_NbBourso + ') euros\\n([+\\-−]?[\\d,]+)\\n%\\n(' + Cst_NbBourso + ') euros\\n\\s*/\\s*([\\d\\s\\u00a0\\u202f]+)$');
+// Les valeurs d'un écran, dans l'ordre (une ligne JSON de MacroDroid ; à défaut de JSON valide, lues une à une).
+function Fn_ValeursEcran(l) {
+  try { const o = JSON.parse(l); if (o && typeof o === 'object') return Object.values(o).map(String); } catch (e) { /* lecture une à une */ }
+  return [...l.matchAll(/"(?:[^"\\]|\\.)*"\s*:\s*"((?:[^"\\]|\\.)*)"/g)].map(m => { try { return JSON.parse('"' + m[1] + '"'); } catch (e) { return m[1]; } });
+}
+// Un mouvement de l'écran « Mes mouvements » : achat, vente, coupon (avec ISIN, quantité, cours), virement, frais.
+function Fn_MouvementBourso(v) {
+  const l = String(v).split('\n').map(x => x.trim()).filter(Boolean);
+  if (l.length < 2) return null;
+  const mT = l.map(x => /^(.+?) - (\d{2})\/(\d{2})\/(\d{4})$/.exec(x)).find(Boolean), mD = mT ? null : l.map(x => /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(x)).find(Boolean);
+  if (!mT && !mD) return null;
+  const d = mT ? mT.slice(2) : mD.slice(1), libelle = mT ? mT[1] : l[0];
+  const isin = l.find(x => /^[A-Z]{2}[A-Z0-9]{9}\d$/.test(x)) || null;
+  const mM = l.slice(1).map(x => new RegExp('^(' + Cst_NbBourso + ',\\d{2})(?: euros| ?€)?$').exec(x)).find(Boolean);
+  const mQ = /Quantité\s*:\s*([\d\s  ]+)/.exec(v), mC = /Cours\s*:\s*([\d\s  ]+,\d+)/.exec(v);
+  const montant = mM ? Fn_Nombre(mM[1]) : null, lib = libelle.toUpperCase();
+  const type = /^ACHAT/.test(lib) ? 'achat' : /^VENTE/.test(lib) ? 'vente' : /COUPON|DIVIDENDE/.test(lib) ? 'dividende'
+    : /^VIR/.test(lib) ? (montant != null && montant < 0 ? 'retrait' : 'versement') : /ABONNEMENT|FRAIS|COMMISSION|COURTAGE/.test(lib) ? 'frais' : 'autre';
+  return { date: d[2] + '-' + d[1] + '-' + d[0], type, libelle, nom: mT ? l[0] : null, isin, montant,
+    qte: mQ ? Number(mQ[1].replace(/[\s  ]/g, '')) : null, cours: mC ? Fn_Nombre(mC[1]) : null };
+}
+function Fn_LireCaptureBourso(texte) {
+  const t = String(texte || ''), mH = /^\s*===SMART-BOURSO v1 (\d+)===/.exec(t);
+  if (!mH) return { erreur: 'Ce texte n’est pas une capture Bourso (en-tête ===SMART-BOURSO absent).' };
+  const part = nom => { const m = new RegExp('===' + nom + '===\\n([\\s\\S]*?)\\n?===(?:MOUVEMENTS|FIN)===').exec(t); return m ? m[1].split('\n').filter(l => l.trim()) : []; };
+  const ecransPos = part('POSITIONS'), ecransMv = part('MOUVEMENTS');
+  const positions = new Map(), mouvements = new Map(); let titres = null, especes = null, plLatTotal = null;
+  ecransPos.forEach(l => {
+    const v = Fn_ValeursEcran(l);
+    v.forEach((x, i) => {
+      let m;
+      if ((m = /valuation titres,\s*([\d\s  ]+,\d+)/.exec(x))) titres = Fn_Nombre(m[1]);
+      else if ((m = /Solde Esp\S*ces disponible[^,]*,\s*([+\-−]?[\d\s  ]+,\d+)/.exec(x))) especes = Fn_Nombre(m[1]);
+      else if ((m = /values latentes,\s*([+\-−]?[\d\s  ]+,\d+)/.exec(x))) plLatTotal = Fn_Nombre(m[1]);
+      else if ((m = Cst_ReLigneBourso.exec(x))) {
+        const nom = m[1].trim(), qte = Number(m[6].replace(/[\s  ]/g, '')), valeur = Fn_Nombre(m[2]), cours = Fn_Nombre(m[3]), pru = Fn_Nombre(m[5]);
+        const suite = new RegExp('^(' + Cst_NbBourso + ') euros$').exec(v[i + 1] || '');
+        const plLat = suite ? Fn_Nombre(suite[1]) : (valeur != null && pru != null ? valeur - qte * pru : null);
+        if (!positions.has(nom) || (suite && positions.get(nom).plLatCalculee))
+          positions.set(nom, { nom, qte, cours, valeur, pru, varJour: Fn_Nombre(m[4]), plLat, plLatCalculee: !suite, dev: 'EUR', courtier: 'B' });
+      }
+    });
+  });
+  ecransMv.forEach(l => Fn_ValeursEcran(l).forEach(x => {
+    const mv = Fn_MouvementBourso(x); if (!mv) return;
+    mouvements.set([mv.date, mv.type, mv.libelle, mv.nom, mv.isin, mv.montant, mv.qte].join('|'), mv);
+  }));
+  const pos = [...positions.values()].map(p => { delete p.plLatCalculee; return p; });
+  const somme = pos.reduce((s, p) => s + (p.valeur || 0), 0);
+  return { ts: Number(mH[1]) * 1000, positions: pos, titres, especes, plLat: plLatTotal, mouvements: [...mouvements.values()],
+    controle: { somme, ecran: titres, ecart: titres != null ? somme - titres : null, ecrans: ecransPos.length, ecransMv: ecransMv.length } };
 }
 // Date locale « AAAA-MM-JJ » (jamais toISOString : après minuit, l'heure universelle donne la veille).
 function Fn_Jour(ts) {
@@ -1049,7 +1121,8 @@ function Fn_EvaluerIndicateur(ind, ctx, reglage) {
    ===================================================================== */
 const Cst_Cle = 'portefeuille-v1';
 const Cst_CapturesCompletes = 40;   // au-delà, une capture ne garde que ses totaux (la courbe n'utilise qu'eux)
-const Etat_Vide = () => ({ captures: [], releve: null, corrections: {}, theme: 'auto', reglages: {}, indicateurs: {}, corrSymboles: {}, analyses: [] });
+const Etat_Vide = () => ({ captures: [], releve: null, corrections: {}, theme: 'auto', reglages: {}, indicateurs: {}, corrSymboles: {}, analyses: [],
+  bourso: { captures: [], mouvements: [] } });
 let Var_Etat = Etat_Vide();
 try { const s = localStorage.getItem(Cst_Cle); if (s) Var_Etat = Object.assign(Etat_Vide(), JSON.parse(s)); } catch (e) { /* stockage indisponible */ }
 
@@ -1104,6 +1177,34 @@ function Fn_Integrer(texte, source) {
   Fn_Sauver();
   return { ok: true, cap: enr };
 }
+/* CAPTURE BOURSO : gardée à part (marque B) ; ses mouvements s'ajoutent, sans doublon, à ceux des captures précédentes. */
+function Fn_IntegrerBourso(texte, source) {
+  const cap = Fn_LireCaptureBourso(texte);
+  if (cap.erreur) return { ok: false, bourso: true, message: cap.erreur };
+  if (!cap.positions.length) return { ok: false, bourso: true, message: 'Aucune ligne lue : le compte-titres n’était pas à l’écran ?' };
+  const b = Var_Etat.bourso = Var_Etat.bourso || { captures: [], mouvements: [] };
+  const enr = { ts: cap.ts, positions: cap.positions, titres: cap.titres, especes: cap.especes, plLat: cap.plLat, controle: cap.controle, source: source || 'macro' };
+  const i = b.captures.findIndex(c => c.ts === cap.ts);
+  if (i >= 0) b.captures[i] = enr; else b.captures.push(enr);
+  b.captures.sort((x, y) => x.ts - y.ts);
+  const cle = m => [m.date, m.type, m.libelle, m.nom, m.isin, m.montant, m.qte].join('|'), vus = new Set(b.mouvements.map(cle));
+  let nouveaux = 0;
+  cap.mouvements.forEach(m => { if (!vus.has(cle(m))) { b.mouvements.push(m); vus.add(cle(m)); nouveaux++; } });
+  b.mouvements.sort((x, y) => x.date < y.date ? -1 : x.date > y.date ? 1 : 0);
+  Fn_Sauver();
+  return { ok: true, bourso: true, cap: enr, nouveaux, lus: cap.mouvements.length };
+}
+function Fn_DerniereBourso() { const c = ((Var_Etat.bourso || {}).captures || []); return c.length ? c[c.length - 1] : null; }
+const Fn_BoursoComplete = c => c && c.controle && c.controle.ecart != null && Math.abs(c.controle.ecart) <= Math.max(1, (c.titres || 0) * 0.0005);
+function Fn_BilanBourso(r) {
+  if (!r.ok) { Fn_NoteReception('crit', '<b>Capture Bourso non intégrée.</b> ' + Fn_Esc(r.message)); return; }
+  const c = r.cap, k = c.controle, complet = Fn_BoursoComplete(c);
+  Fn_NoteReception(complet ? 'ok' : 'warn', '<b>Capture Bourso du ' + Fn_Esc(Fmt_DateHeure(c.ts)) + ' intégrée</b> — ' + c.positions.length + ' ligne(s)'
+    + (complet ? ', somme des lignes = évaluation des titres.'
+      : k.ecran == null ? '. L’évaluation des titres n’a pas été lue : impossible de vérifier qu’il ne manque pas de ligne.'
+      : '. <b>Il manque sans doute une ligne</b> : somme ' + Fn_Esc(Fmt_Eur(k.somme, 2)) + ' pour ' + Fn_Esc(Fmt_Eur(k.ecran, 2)) + ' à l’écran. Relance la capture en faisant glisser plus lentement.')
+    + (r.lus ? ' ' + r.lus + ' mouvement(s) lu(s), dont ' + r.nouveaux + ' nouveau(x).' : ''));
+}
 function Fn_NoteReception(type, html) { $('reception').innerHTML = '<div class="note note-' + type + '">' + html + '</div>'; }
 function Fn_Alertes(c) {
   const k = c.controle, out = [];
@@ -1133,11 +1234,23 @@ function Fn_HtmlVersement(v) {
 async function Fn_ReceptionAuto() {
   // ?capture=… : capture de la macro « DEGIRO -> Portefeuille » ; ?releve=… : relevé CSV exporté de l'appli DEGIRO,
   // déposé par la macro « Smart - relevé ». Les deux arrivent par le presse-papier.
-  const releve = /[?&]releve=/.test(location.search);
-  if (!/[?&]capture=/.test(location.search) && !releve) return;
+  // ?bourso=… : capture de la macro « Smart - Bourso ».
+  const releve = /[?&]releve=/.test(location.search), bourso = /[?&]bourso=/.test(location.search);
+  if (!/[?&]capture=/.test(location.search) && !releve && !bourso) return;
   try { history.replaceState(null, '', location.pathname); } catch (e) { /* adresse laissée telle quelle */ }
   const recevoir = async () => {
     const t = await navigator.clipboard.readText();
+    if (bourso || /^\s*===SMART-BOURSO/.test(t)) {
+      const cap = Fn_LireCaptureBourso(t);
+      if (!cap.erreur && (Date.now() - cap.ts) / 60000 > Cst_AgeMaxCaptureMin) {
+        Fn_NoteReception('warn', 'La capture Bourso du presse-papier date du ' + Fn_Esc(Fmt_DateHeure(cap.ts)) + ' : ce n’est pas celle qui vient d’être faite.'
+          + '<div class="rang"><button id="b-forcer">L’intégrer quand même</button></div>');
+        $('b-forcer').onclick = () => { Fn_BilanBourso(Fn_IntegrerBourso(t, 'macro')); Fn_Rendre(); };
+        return;
+      }
+      Fn_BilanBourso(Fn_IntegrerBourso(t, 'macro')); Fn_Rendre();
+      return;
+    }
     if (releve) {
       const b = Fn_ImporterReleve(t, 'relevé de l’appli DEGIRO');
       Fn_Sauver(); Fn_NoteReception(b.ok ? 'ok' : 'warn', 'Relevé reçu — ' + b.texte); Fn_Rendre();
@@ -1156,7 +1269,7 @@ async function Fn_ReceptionAuto() {
   try { await recevoir(); }
   catch (e) {
     Fn_NoteReception('warn', 'Le navigateur demande un appui pour lire le presse-papier.'
-      + '<div class="rang"><button class="accent" id="b-recevoir">' + (releve ? 'Recevoir le relevé' : 'Recevoir la capture') + '</button></div>');
+      + '<div class="rang"><button class="accent" id="b-recevoir">' + (releve ? 'Recevoir le relevé' : bourso ? 'Recevoir la capture Bourso' : 'Recevoir la capture') + '</button></div>');
     $('b-recevoir').onclick = () => recevoir().catch(() => Fn_NoteReception('crit', 'Lecture du presse-papier refusée : utilisez « Coller une capture » dans l’onglet Réglages.'));
   }
 }
@@ -1527,12 +1640,44 @@ function Fn_Rendre() {
   Fn_RendreSynthese(k);
   if (c) { Fn_RendreIndicateurs(k); Fn_GrapheEvolution(k); Fn_GrapheRepartition(c); Fn_GraphePlusValues(c); Fn_RendreEcarts(c); Fn_RendreTableau(c); }
   else $('c-ecarts').classList.add('cache');
+  Fn_RendreBourso();
   Fn_RendreCours();
   if (c) Fn_RendreAnalyse();
   Fn_RendreRevenus();
   Fn_RendreReleve();
   const n = Var_Etat.captures.length;
   $('captures-etat').textContent = n ? n + ' capture(s) enregistrée(s), du ' + Fmt_Date(Var_Etat.captures[0].ts) + ' au ' + Fmt_Date(Var_Etat.captures[n - 1].ts) + '.' : 'Aucune capture enregistrée.';
+}
+/* COMPTE BOURSO (dernière capture de la macro « Smart - Bourso ») : lignes, totaux, contrôle, mouvements lus. */
+function Fn_RendreBourso() {
+  const c = Fn_DerniereBourso(), carte = $('c-bourso');
+  carte.classList.toggle('cache', !c);
+  if (!c) return;
+  const k = c.controle, complet = Fn_BoursoComplete(c);
+  $('bourso-sous').innerHTML = 'Capture du ' + Fn_Esc(Fmt_DateHeure(c.ts)) + ' · ' + c.positions.length + ' ligne(s) · '
+    + (complet ? 'somme des lignes = évaluation des titres ✓'
+      : '<b>il manque sans doute une ligne</b> (somme ' + Fn_Esc(Fmt_Eur(k.somme, 2)) + ' pour ' + Fn_Esc(Fmt_Eur(k.ecran, 2)) + ' à l’écran) : relance la capture en faisant glisser plus lentement');
+  const tuile = (lib, val, cls) => '<div class="tuile"><div class="lib">' + lib + '</div><div class="val ' + (cls || '') + '" style="font-size:16px">' + val + '</div></div>';
+  const total = c.titres != null && c.especes != null ? c.titres + c.especes : null;
+  $('bourso-tuiles').innerHTML = tuile('Valeur des titres', Fmt_Eur(c.titres)) + tuile('Espèces', Fmt_Eur(c.especes, 2))
+    + tuile('Total', Fmt_Eur(total)) + tuile('Plus-value latente', c.plLat == null ? '—' : Fmt_Signe(c.plLat), Cls_Signe(c.plLat));
+  const lignes = c.positions.slice().sort((a, b) => (b.valeur || 0) - (a.valeur || 0));
+  $('t-bourso').innerHTML = '<table><thead><tr><th>Ligne</th><th>Valeur</th><th>PRU</th><th>Plus-value latente</th></tr></thead><tbody>'
+    + lignes.map(p => { const cout = p.qte * p.pru, pct = cout > 0 && p.plLat != null ? p.plLat / cout * 100 : null;
+      return '<tr><td>' + Fn_Esc(p.nom) + '<div class="muet">' + Fmt_Nb(p.qte, 0) + ' × ' + Fmt_Nb(p.cours, 2) + ' €'
+        + (p.varJour != null ? ' · <span class="' + Cls_Signe(p.varJour) + '">' + Fmt_Pct(p.varJour, 2, true) + '</span> sur le jour' : '') + '</div></td>'
+        + '<td>' + Fmt_Eur(p.valeur) + '</td><td>' + Fmt_Nb(p.pru, 2) + ' €</td>'
+        + '<td class="' + Cls_Signe(p.plLat) + '">' + (p.plLat == null ? '—' : Fmt_Signe(p.plLat) + (pct != null ? '<div class="muet">' + Fmt_Pct(pct, 1, true) + '</div>' : '')) + '</td></tr>'; }).join('')
+    + '</tbody></table>';
+  const mv = (Var_Etat.bourso.mouvements || []).slice().reverse();
+  const libType = { achat: '▲ achat', vente: '▼ vente', dividende: 'dividende', versement: 'versement', retrait: 'retrait', frais: 'frais', autre: '' };
+  $('bourso-mv').innerHTML = mv.length ? '<details><summary>' + mv.length + ' mouvement(s) lu(s) dans l’appli, du ' + Fmt_Jour(mv[mv.length - 1].date) + ' au ' + Fmt_Jour(mv[0].date)
+    + '</summary><div class="defile"><table><thead><tr><th>Date</th><th>Opération</th><th>Qté</th><th>Montant</th></tr></thead><tbody>'
+    + mv.map(m => '<tr><td>' + Fmt_Jour(m.date) + '</td><td>' + Fn_Esc(m.nom || m.libelle) + '<div class="muet">' + Fn_Esc(libType[m.type] || m.libelle)
+      + (m.cours != null ? ' à ' + Fmt_Nb(m.cours, 2) + ' €' : '') + '</div></td><td>' + (m.qte != null ? Fmt_Nb(m.qte, 0) : '') + '</td>'
+      + '<td class="' + Cls_Signe(m.montant) + '">' + (m.montant != null ? (m.montant > 0 ? '+' : '') + Fmt_Eur(m.montant, 2) : '—') + '</td></tr>').join('')
+    + '</tbody></table></div></details>' : '<div class="muet" style="margin-top:6px">Aucun mouvement lu pour l’instant : la macro ne demande l’écran Mouvements '
+    + 'que quand le solde espèces change.</div>';
 }
 function Fn_Theme() {
   const t = Var_Etat.theme || 'auto';
@@ -1562,10 +1707,14 @@ window.addEventListener('scroll', () => {
 const lireFichier = f => new Promise((ok, ko) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = ko; r.readAsText(f, 'utf-8'); });
 
 $('b-coller').onclick = () => $('zone-collage').classList.toggle('cache');
-$('b-integrer').onclick = () => { Fn_BilanReception(Fn_Integrer($('t-collage').value, 'collage')); $('t-collage').value = ''; Fn_Rendre(); window.scrollTo(0, 0); };
+// Une capture Bourso collée ou importée se reconnaît à son en-tête.
+const Fn_EstBourso = t => /^\s*===SMART-BOURSO/.test(t);
+$('b-integrer').onclick = () => { const t = $('t-collage').value;
+  if (Fn_EstBourso(t)) Fn_BilanBourso(Fn_IntegrerBourso(t, 'collage')); else Fn_BilanReception(Fn_Integrer(t, 'collage'));
+  $('t-collage').value = ''; Fn_Rendre(); window.scrollTo(0, 0); };
 $('f-captures').onchange = async e => {
   let ok = 0, ko = 0;
-  for (const f of e.target.files) { const r = Fn_Integrer(await lireFichier(f), 'archive'); r.ok ? ok++ : ko++; }
+  for (const f of e.target.files) { const t = await lireFichier(f), r = Fn_EstBourso(t) ? Fn_IntegrerBourso(t, 'archive') : Fn_Integrer(t, 'archive'); r.ok ? ok++ : ko++; }
   Fn_NoteReception(ko ? 'warn' : 'ok', ok + ' capture(s) importée(s)' + (ko ? ', ' + ko + ' fichier(s) ignoré(s) (pas une capture, ou capture incomplète)' : '') + '.');
   e.target.value = ''; Fn_Rendre(); window.scrollTo(0, 0);
 };
