@@ -298,8 +298,9 @@ table.gauche-1 th:first-child, table.gauche-1 td:first-child { text-align: left;
   <section class="carte" id="c-releve-bourso" data-onglet="releve">
     <h2>Relevés Bourso</h2>
     <div class="muet">Les relevés PDF de BoursoBank, lus ici même (rien n’est envoyé ; nom, adresse et numéros de compte sont ignorés).
-      Le <b>relevé titres</b> donne l’ISIN de chaque ligne du compte-titres : c’est lui qui permet d’avoir leurs cours.
-      Les relevés de compte et de coupons (historique, dividendes) viendront à l’étape suivante.</div>
+      Sélectionne-les tous d’un coup, dans n’importe quel ordre ; un relevé déjà importé n’est pas compté deux fois.
+      <b>Relevés espèces</b> : l’historique (achats, ventes, versements, dividendes, frais). <b>Relevés titres</b> : l’ISIN de chaque action et
+      les actions reçues sans argent (actions gratuites, BSA). <b>Relevés de dividendes</b> : le brut et l’impôt de chaque dividende.</div>
     <div id="releve-bourso-etat"></div>
     <div class="rang">
       <label class="btn">Importer des relevés Bourso (PDF)<input type="file" accept=".pdf,application/pdf" multiple id="f-releve-bourso" class="cache"></label>
@@ -530,17 +531,71 @@ function Fn_LireCaptureBourso(texte) {
 }
 /* TEXTE D'UN PDF, LIGNE PAR LIGNE. pdf.js rend des morceaux de texte placés (x, y) ; on les regroupe par ligne
    (même hauteur, à 2 points près), de haut en bas, et de gauche à droite dans une ligne. pages : [[{ str, x, y }]]. */
-function Fn_LignesPdf(pages) {
+function Fn_LignesPdfItems(pages) {   // [{ y, items: [{ str, x, w }] }], page après page
   const out = [];
   (pages || []).forEach(items => {
     const lignes = [];
     items.filter(it => String(it.str).trim()).slice().sort((a, b) => b.y - a.y || a.x - b.x).forEach(it => {
       const l = lignes.find(x => Math.abs(x.y - it.y) <= 2);
-      if (l) l.items.push(it); else lignes.push({ y: it.y, items: [it] });
+      const e = { str: String(it.str).trim(), x: it.x, w: it.w || 0 };
+      if (l) l.items.push(e); else lignes.push({ y: it.y, items: [e] });
     });
-    lignes.sort((a, b) => b.y - a.y).forEach(l => out.push(l.items.sort((a, b) => a.x - b.x).map(it => String(it.str).trim()).join(' ').replace(/\s+/g, ' ')));
+    lignes.sort((a, b) => b.y - a.y).forEach(l => { l.items.sort((a, b) => a.x - b.x); out.push(l); });
   });
   return out;
+}
+function Fn_LignesPdf(pages) { return Fn_LignesPdfItems(pages).map(l => l.items.map(it => it.str).join(' ').replace(/\s+/g, ' ')); }
+/* RELEVÉ ESPÈCES BOURSO (PDF). Deux présentations :
+   - ancienne : Date compta. | Libellé | Quantité | Nom de la valeur | Débit | Crédit, une opération par ligne,
+     « ANCIEN SOLDE » et « NOUVEAU SOLDE » ; une vente porte une quantité négative ; milliers « 1 500,00 » ;
+   - récente : Date opération | Libellé | Date valeur | Débit | Crédit, nom et quantité sur des lignes
+     « Nom de la valeur: … » et « Quantité: … » sous l'opération ; « Solde au » et « Nouveau solde en EUR » ; milliers « 1.504,51 ».
+   Débit ou crédit se lit à la position : un montant dont le bord droit est à gauche de l'en-tête « Crédit » est un débit.
+   Contrôle : solde de départ + crédits − débits = nouveau solde. Le nom du titulaire (sous un virement) est ignoré. */
+const Cst_ReMontantPdf = /^-?\d{1,3}(?:[ .  ]\d{3})*,\d{2}$/;
+function Fn_LireReleveEspecesBourso(lignes) {
+  const tout = lignes.map(l => l.items.map(i => i.str).join(' ')).join('\n');
+  if (!/ANCIEN\s+SOLDE|Solde au/i.test(tout) || !/NOUVEAU\s+SOLDE|Nouveau solde/i.test(tout)) return { erreur: 'Ce PDF n’est pas un relevé espèces Bourso.' };
+  const nouveau = /Solde au/i.test(tout), dateIso = s => { const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s); return m ? m[3] + '-' + m[2] + '-' + m[1] : null; };
+  let xCredit = null, xQte = null, xNom = null, xDebit = null, debut = null, fin = null;
+  const ops = [];
+  const montantDe = items => {   // dernier montant de la ligne, signé selon sa colonne
+    const m = items.filter(i => Cst_ReMontantPdf.test(i.str)).pop();
+    if (!m || xCredit == null) return m ? Fn_Nombre(m.str) : null;
+    return (m.x + m.w < xCredit ? -1 : 1) * Math.abs(Fn_Nombre(m.str));
+  };
+  lignes.forEach(l => {
+    const it = l.items, txt = it.map(i => i.str).join(' ');
+    const hC = it.find(i => /^Cr[ée]dit/.test(i.str)), hD = it.find(i => /^D[ée]bit/.test(i.str));
+    if (hC && hD) { xCredit = hC.x; xDebit = hD.x; const q = it.find(i => /^Quantit/.test(i.str)), n = it.find(i => /^Nom de la valeur/.test(i.str)); if (q) xQte = q.x; if (n) xNom = n.x; return; }
+    if (/ANCIEN\s+SOLDE|^Solde au\b/i.test(txt)) { const d = it.map(i => dateIso(i.str)).find(Boolean); debut = { date: d, solde: montantDe(it) }; return; }
+    if (/NOUVEAU\s+SOLDE|Nouveau solde/i.test(txt)) { const d = it.map(i => dateIso(i.str)).find(Boolean); fin = { date: d, solde: montantDe(it) }; return; }
+    const d = dateIso(it[0].str);
+    if (d && it[0].x < 100) {
+      const montant = montantDe(it), autres = it.slice(1).filter(i => !Cst_ReMontantPdf.test(i.str) && !dateIso(i.str));
+      let libelle, nom = null, qte = null;
+      if (!nouveau && xQte != null && xNom != null) {
+        libelle = autres.filter(i => i.x < xQte - 5).map(i => i.str).join(' ');
+        const q = autres.find(i => i.x >= xQte - 5 && i.x < xNom - 10 && /^-?\d[\d ]*$/.test(i.str));
+        qte = q ? Math.abs(Number(q.str.replace(/\s/g, ''))) : null;
+        nom = autres.filter(i => i.x >= xNom - 20 && (xDebit == null || i.x < xDebit)).map(i => i.str).join(' ') || null;
+      } else libelle = autres.map(i => i.str).join(' ');
+      // Ni nom du titulaire (libellés de virement) ni numéro de compte (reprise de solde) : rien de personnel n'est gardé.
+      const lib = libelle.replace(/\s+/g, ' ').trim(), libPropre = /^VIR\b/i.test(lib) ? 'VIR' : /^Reprise solde/i.test(lib) ? 'Reprise solde compte' : lib;
+      ops.push({ date: d, libelle: libPropre, nom, qte, montant });
+      return;
+    }
+    const der = ops[ops.length - 1];   // présentation récente : nom et quantité sous l'opération
+    if (der && nouveau) {
+      let m;
+      if ((m = /^Nom de la valeur\s*:\s*(.+)$/.exec(txt))) der.nom = m[1].trim();
+      else if ((m = /^Quantit\S*\s*:\s*(-?[\d\s.  ]+)$/.exec(txt))) der.qte = Math.abs(Number(m[1].replace(/[\s.  ]/g, '')));
+    }
+  });
+  const reelles = ops.filter(o => o.montant != null);
+  const calc = debut && debut.solde != null ? debut.solde + reelles.reduce((s, o) => s + o.montant, 0) : null;
+  return { format: nouveau ? 'nouveau' : 'ancien', debut, fin, operations: reelles,
+    controle: { ok: calc != null && fin && fin.solde != null && Math.abs(calc - fin.solde) < 0.005, calcule: calc } };
 }
 /* RELEVÉ TITRES BOURSO (PDF mensuel) : chaque ligne détenue s'écrit « 1 234 NOM DE LA VALEUR (FR0000000000) ».
    Sert à connaître l'ISIN des lignes du compte-titres, que l'appli n'affiche pas dans la liste. */
@@ -552,6 +607,107 @@ function Fn_LireReleveTitresBourso(lignes) {
   while ((m = re.exec(texte))) titres.push({ qte: Number(m[1].replace(/[\s  ]/g, '')), nom: m[2].trim(), isin: m[3] });
   const d = /Valoris\S* au (\d{2})\/(\d{2})\/(\d{4})/.exec(texte);
   return { date: d ? d[3] + '-' + d[2] + '-' + d[1] : null, titres };
+}
+/* RELEVÉ COUPONS / DIVIDENDES BOURSO (PDF mensuel, même présentation de 2020 à 2026) : une ligne par coupon,
+   « date d'échéance | quantité | NOM (ISIN) | montants ». Les colonnes vides n'ont pas de montant : chaque montant va à la
+   colonne dont l'en-tête est le plus proche à sa gauche (Brut fiscal, Crédit d'impôt, Prélèvements, Net fiscal,
+   Commission T.T.C., Net client). Impôt du coupon = net client − brut (crédit d'impôt étranger, prélèvements, commission). */
+function Fn_LireReleveCouponsBourso(lignes) {
+  const tete = lignes.find(l => l.items.some(i => /^Brut fiscal/.test(i.str)));
+  if (!tete) return { erreur: 'Ce PDF n’est pas un relevé de coupons Bourso.' };
+  const col = re => { const i = tete.items.find(x => re.test(x.str)); return i ? i.x : null; };
+  const cols = [['brut', col(/^Brut fiscal/)], ['credit', col(/^Cr[ée]dit d/)], ['prelev', col(/^Pr[ée]l[èe]vements/)], ['netFiscal', col(/^Net fiscal/)],
+    ['commission', col(/^T\.T\.C/)], ['net', col(/^Net client/)]].filter(c => c[1] != null).sort((a, b) => a[1] - b[1]);
+  const coupons = [];
+  lignes.forEach(l => {
+    const it = l.items, m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(it[0] ? it[0].str : '');
+    if (!m || it[0].x > 60) return;
+    const nomIsin = it.map(i => /^(.+?)\s*\(([A-Z]{2}[A-Z0-9]{9}\d)\)$/.exec(i.str)).find(Boolean);
+    const q = it.find(i => /^\d[\d\s  ]*$/.test(i.str) && i !== it[0]);
+    if (!nomIsin) return;
+    const c = { date: m[3] + '-' + m[2] + '-' + m[1], qte: q ? Number(q.str.replace(/[\s  ]/g, '')) : null, nom: nomIsin[1].trim(), isin: nomIsin[2] };
+    it.filter(i => Cst_ReMontantPdf.test(i.str)).forEach(i => { const k = cols.filter(cl => cl[1] <= i.x + 1).pop(); if (k) c[k[0]] = Fn_Nombre(i.str); });
+    if (c.brut != null && c.net != null) coupons.push(c);
+  });
+  return { coupons };
+}
+/* HISTORIQUE BOURSO AU FORMAT DU RELEVÉ DEGIRO : toutes les vues et tous les calculs de la page le lisent comme celui
+   de DEGIRO. Sources : les opérations des relevés espèces (ops), les relevés titres trimestriels (points de contrôle des
+   quantités, et ISIN par nom), les ISIN tapés à la main, et les mouvements lus dans l'appli après le dernier relevé.
+   - achat / vente : « Achat 41 NOM@24,343659 EUR (ISIN) », prix = montant net ÷ quantité : FRAIS COMPRIS, comme Bourso ;
+   - coupon : « Dividende NOM » (net) ; prélèvements fiscaux : « Impôts sur dividende » ; virement : « Versement de fonds » /
+     « Retrait de fonds » (sans le nom du titulaire) ; « Reprise solde compte » (changement de compte chez Bourso) :
+     transfert interne, ni versement ni argent nouveau ; abonnement : « Frais Bourso … » ;
+   - actions reçues ou parties SANS argent (dividende en actions, BSA gratuits, rompus…) : elles n'apparaissent que dans les
+     relevés titres ; à chaque relevé titres, l'écart entre la quantité attendue et la quantité relevée devient une
+     « Attribution : Achat n NOM@0 EUR » (ou « Opération sur titres : Vente … @0 ») datée du relevé. */
+function Fn_MouvementsDepuisBourso(ops, titresHist, isinsManuels, mvtsAppli, coupons) {
+  const isinDe = {};
+  (titresHist || []).forEach(r => r.titres.forEach(t => { isinDe[Fn_NomCourt(t.nom)] = t.isin; }));
+  (coupons || []).forEach(c => { if (!isinDe[Fn_NomCourt(c.nom)]) isinDe[Fn_NomCourt(c.nom)] = c.isin; });
+  const pris = new Set();   // coupon du relevé de dividendes rapproché d'un coupon du relevé espèces : même net, même titre, 20 jours au plus
+  const couponDe = o => (coupons || []).find((c, k) => !pris.has(k) && Math.abs(c.net - o.montant) < 0.005 && Math.abs(Date.parse(c.date) - Date.parse(o.date)) <= 20 * 86400000
+    && (Fn_MemeNom(Fn_NomCourt(c.nom), Fn_NomCourt(o.nom || '')) || c.isin === isinDe[Fn_NomCourt(o.nom || '')]) && (pris.add(k), true));
+  Object.entries(isinsManuels || {}).forEach(([n, i]) => { if (i) isinDe[Fn_NomCourt(n)] = i; });
+  const isin = nom => nom ? (isinDe[Fn_NomCourt(nom)] || '') : '';
+  const fmtPrix = p => String(Math.round(p * 1e6) / 1e6).replace('.', ',');
+  const out = [], sansIsin = new Set();
+  const ajout = (date, desc, montant, nom, i, n) => out.push({ date, heure: 'B' + String(n).padStart(4, '0'), produit: nom || '', isin: i || '', desc, fx: null, dev: 'EUR', montant,
+    soldeDev: '', solde: null, ordre: '', source: 'bourso', cle: 'bourso|' + date + '|' + desc + '|' + montant });
+  let n = 0;
+  (ops || []).forEach(o => {
+    const L = o.libelle.toUpperCase(), i = isin(o.nom), suffixe = i ? ' (' + i + ')' : '';
+    n++;
+    if (/^(ACHAT|SOUSCRIPTION)/.test(L) && o.qte) { if (!i) sansIsin.add(o.nom); ajout(o.date, 'Achat ' + o.qte + ' ' + o.nom + '@' + fmtPrix(-o.montant / o.qte) + ' EUR' + suffixe, o.montant, o.nom, i, n); }
+    else if (/^VENTE/.test(L) && o.qte) { if (!i) sansIsin.add(o.nom); ajout(o.date, 'Vente ' + o.qte + ' ' + o.nom + '@' + fmtPrix(o.montant / o.qte) + ' EUR' + suffixe, o.montant, o.nom, i, n); }
+    else if (/COUPON|DIVIDENDE/.test(L)) {
+      const c = o.montant > 0 ? couponDe(o) : null;   // avec le relevé de dividendes : brut, puis l'impôt retenu (net − brut)
+      if (c) { ajout(o.date, 'Dividende ' + (o.nom || ''), c.brut, o.nom, i || c.isin, n);
+        if (Math.abs(c.net - c.brut) >= 0.005) ajout(o.date, 'Impôts sur dividende ' + (o.nom || ''), Math.round((c.net - c.brut) * 100) / 100, o.nom, i || c.isin, n); }
+      else ajout(o.date, 'Dividende ' + (o.nom || ''), o.montant, o.nom, i, n);
+    }
+    else if (/PRELEVEMENTS? FISCAUX|IMPOT/.test(L)) ajout(o.date, 'Impôts sur dividende ' + (o.nom || ''), o.montant, o.nom, i, n);
+    else if (/^REPRISE SOLDE/.test(L)) ajout(o.date, 'Transfert interne : reprise du solde de l’ancien compte (Bourso)', o.montant, '', '', n);
+    else if (/^VIR/.test(L)) ajout(o.date, o.montant >= 0 ? 'Versement de fonds (Bourso)' : 'Retrait de fonds (Bourso)', o.montant, '', '', n);
+    else if (/ABONNEMENT|FRAIS|COMMISSION|DROITS DE GARDE/.test(L)) ajout(o.date, 'Frais Bourso : ' + o.libelle.toLowerCase(), o.montant, '', '', n);
+    else ajout(o.date, 'Bourso : ' + o.libelle.toLowerCase(), o.montant, o.nom, i, n);
+  });
+  // Mouvements de l'appli (trois derniers mois) absents des relevés : même type, même montant, à 7 jours près.
+  const jours = (a, b) => Math.abs(Date.parse(a) - Date.parse(b)) / 86400000;
+  (mvtsAppli || []).forEach(m => {
+    if (m.montant == null && m.type !== 'vente') return;
+    const deja = out.some(x => jours(x.date, m.date) <= 7 && x.montant != null && m.montant != null && Math.abs(x.montant - m.montant) < 0.005);
+    if (deja) return;
+    n++;
+    const nom = m.nom || m.libelle, i = m.isin || isin(m.nom), suffixe = i ? ' (' + i + ')' : '';
+    if (m.type === 'achat' && m.qte) ajout(m.date, 'Achat ' + m.qte + ' ' + nom + '@' + fmtPrix(-m.montant / m.qte) + ' EUR' + suffixe, m.montant, nom, i, n);
+    else if (m.type === 'vente' && m.qte) ajout(m.date, 'Vente ' + m.qte + ' ' + nom + '@' + fmtPrix((m.montant || 0) / m.qte) + ' EUR' + suffixe, m.montant || 0, nom, i, n);
+    else if (m.type === 'dividende') ajout(m.date, 'Dividende ' + nom, m.montant, nom, i, n);
+    else if (m.type === 'versement' || m.type === 'retrait') ajout(m.date, m.montant >= 0 ? 'Versement de fonds (Bourso)' : 'Retrait de fonds (Bourso)', m.montant, '', '', n);
+    else if (m.type === 'frais') ajout(m.date, 'Frais Bourso : ' + String(m.libelle).toLowerCase(), m.montant, '', '', n);
+  });
+  // Points de contrôle : quantités des relevés titres.
+  const qte = {}, nomDe = {};
+  const appliquer = jusqua => out.filter(m => m.date <= jusqua && m.isin).forEach(m => {
+    if (m.vu) return; m.vu = true;
+    const r = Cst_ReOperation.exec(m.desc); if (!r) return;
+    const q = Fn_Nombre(r[3]); qte[m.isin] = (qte[m.isin] || 0) + (/^(achat|buy)/i.test(r[2]) ? q : -q); nomDe[m.isin] = m.produit;
+  });
+  (titresHist || []).slice().sort((a, b) => a.date < b.date ? -1 : 1).forEach(r => {
+    appliquer(r.date);
+    const releve = {}; r.titres.forEach(t => { releve[t.isin] = t.qte; nomDe[t.isin] = nomDe[t.isin] || t.nom; });
+    new Set(Object.keys(qte).concat(Object.keys(releve))).forEach(i => {
+      const d = (releve[i] || 0) - (qte[i] || 0);
+      if (!d) return;
+      n++;
+      ajout(r.date, (d > 0 ? 'Attribution : Achat ' : 'Opération sur titres : Vente ') + Math.abs(d) + ' ' + nomDe[i] + '@0 EUR (' + i + ')', 0, nomDe[i], i, n);
+      out[out.length - 1].vu = true; out[out.length - 1].ajustement = true;
+      qte[i] = (qte[i] || 0) + d;
+    });
+  });
+  out.forEach(m => { delete m.vu; });
+  out.sort((a, b) => (a.date + a.heure) < (b.date + b.heure) ? -1 : (a.date + a.heure) > (b.date + b.heure) ? 1 : 0);
+  return { mouvements: out, sansIsin: [...sansIsin].filter(Boolean) };
 }
 /* ISIN DES LIGNES BOURSO : l'appli les nomme autrement que les relevés (« ALPHA ET BETA » / « ALPHA BETA »,
    « GAMMA » / « GAMMA SE »). Une ligne prend l'ISIN d'un titre du relevé (ou d'un mouvement) qui a la
@@ -1224,7 +1380,7 @@ const Cls_Signe = v => v == null ? '' : v >= 0 ? 'pos' : 'neg';
 function Fn_DerniereDegiro() { for (let i = Var_Etat.captures.length - 1; i >= 0; i--) if (Var_Etat.captures[i].positions) return Var_Etat.captures[i]; return null; }
 function Fn_MouvementsDegiro() { return Var_Etat.releve ? Var_Etat.releve.mouvements : []; }
 // Historique Bourso : les relevés de compte importés (étape suivante), convertis au format du relevé DEGIRO.
-const Fn_MouvementsBourso = () => ((Var_Etat.bourso || {}).releve || {}).mouvements || [];
+const Fn_MouvementsBourso = () => Fn_HistoBourso().mouvements;
 function Fn_Compte() {
   const d = !!Fn_DerniereDegiro() || Fn_MouvementsDegiro().length > 0, b = !!Fn_DerniereBourso();
   if (!b) return 'D'; if (!d) return 'B';
@@ -1322,43 +1478,100 @@ function Fn_IntegrerBourso(texte, source) {
   Fn_Sauver();
   return { ok: true, bourso: true, cap: enr, nouveaux, lus: cap.mouvements.length };
 }
-/* RELEVÉS BOURSO EN PDF, lus dans le navigateur avec pdf.js (chargé à la demande depuis jsDelivr ; le fichier ne quitte
-   pas l'appareil). Étape 1 : le relevé titres (ISIN des lignes). Les relevés de compte et de coupons : étape suivante. */
+/* RELEVÉS BOURSO EN PDF, lus dans le navigateur avec pdf.js (chargé à la demande depuis jsDelivr ; le fichier ne quitte pas
+   l'appareil). Trois sortes, reconnues à leur contenu : relevés espèces (l'historique : achats, ventes, versements,
+   dividendes nets, frais), relevés titres (quantités trimestrielles et ISIN), relevés de dividendes (brut et impôt).
+   Un relevé espèces dont les soldes ne se tiennent pas (départ + crédits − débits ≠ nouveau solde) est refusé. */
 const Cst_PdfJs = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.min.mjs', Cst_PdfJsWorker = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs';
-async function Fn_TextePdf(fichier) {
+async function Fn_PagesPdf(fichier) {
   const pdfjs = await import(Cst_PdfJs);
   pdfjs.GlobalWorkerOptions.workerSrc = Cst_PdfJsWorker;
   const doc = await pdfjs.getDocument({ data: new Uint8Array(await fichier.arrayBuffer()) }).promise, pages = [];
   for (let i = 1; i <= doc.numPages; i++) {
     const t = await (await doc.getPage(i)).getTextContent();
-    pages.push(t.items.map(it => ({ str: it.str, x: it.transform[4], y: it.transform[5] })));
+    pages.push(t.items.map(it => ({ str: it.str, x: it.transform[4], y: it.transform[5], w: it.width })));
   }
-  return Fn_LignesPdf(pages);
+  return pages;
+}
+// Ce qui est gardé : relevés espèces par période, relevés titres par date, dividendes par relevé, ISIN tapés à la main.
+const Fn_ReleveBourso = () => { const b = Var_Etat.bourso = Var_Etat.bourso || { captures: [], mouvements: [] };
+  return b.releve = b.releve && b.releve.especes ? b.releve : { especes: {}, titres: {}, coupons: {}, isins: {} }; };
+// L'historique Bourso au format DEGIRO (voir Fn_MouvementsDepuisBourso), recalculé quand une source change.
+function Fn_HistoBourso() {
+  const b = Var_Etat.bourso || {}, r = b.releve;
+  if (!r || !r.especes || !Object.keys(r.especes).length) return { mouvements: [], sansIsin: [], ruptures: [], releves: [] };
+  const cle = [Object.keys(r.especes).length, Object.keys(r.titres).length, Object.keys(r.coupons).length, JSON.stringify(r.isins), (b.mouvements || []).length].join('|');
+  if (Var_Memo.histoBoursoCle === cle) return Var_Memo.histoBourso;
+  const releves = Object.values(r.especes).sort((x, y) => (x.debut.date || '') < (y.debut.date || '') ? -1 : 1);
+  const ops = []; releves.forEach(x => x.ops.forEach(o => ops.push(o)));
+  ops.sort((x, y) => x.date < y.date ? -1 : x.date > y.date ? 1 : 0);   // tri stable : l'ordre du relevé est gardé dans une journée
+  const titresHist = Object.entries(r.titres).map(([date, titres]) => ({ date, titres }));
+  const coupons = [].concat(...Object.values(r.coupons));
+  const res = Fn_MouvementsDepuisBourso(ops, titresHist, r.isins, b.mouvements, coupons);
+  // Relevé manquant : le solde de départ d'un relevé n'est pas le solde final du précédent (sauf reprise de solde d'un ancien compte).
+  const ruptures = [];
+  releves.forEach((x, k) => { const p = releves[k - 1]; if (!p || Math.abs(p.fin.solde - x.debut.solde) < 0.005) return;
+    if (x.debut.solde === 0 && x.ops.some(o => /^Reprise solde/i.test(o.libelle) && Math.abs(o.montant - p.fin.solde) < 0.005)) return;
+    ruptures.push({ apres: p.debut.date, avant: x.debut.date }); });
+  Var_Memo.histoBoursoCle = cle;
+  return Var_Memo.histoBourso = Object.assign(res, { ruptures, releves: releves.map(x => ({ du: x.debut.date, fin: x.fin.solde })) });
 }
 async function Fn_ImporterPdfBourso(fichiers) {
-  const etat = $('releve-bourso-etat'), b = Var_Etat.bourso = Var_Etat.bourso || { captures: [], mouvements: [] }, bilan = [];
+  const etat = $('releve-bourso-etat'), b = Var_Etat.bourso = Var_Etat.bourso || { captures: [], mouvements: [] }, r = Fn_ReleveBourso();
+  const compte = { especes: 0, titres: 0, coupons: 0 }, erreurs = [];
   etat.innerHTML = '<div class="note">Lecture de ' + fichiers.length + ' PDF…</div>';
   for (const f of fichiers) {
     let lignes;
-    try { lignes = await Fn_TextePdf(f); } catch (e) { bilan.push(Fn_Esc(f.name) + ' : illisible (' + Fn_Esc(e.message) + ')'); continue; }
-    const r = Fn_LireReleveTitresBourso(lignes);
-    if (r.erreur) { bilan.push(Fn_Esc(f.name) + ' : ' + (/Relev[ée] de compte|Extrait de votre compte|COUPON/i.test(lignes.join(' ')) ? 'relevé de compte ou de coupons : pris en charge à l’étape suivante' : Fn_Esc(r.erreur))); continue; }
-    if (!b.titres || !b.titresDate || (r.date || '') >= b.titresDate) { b.titres = r.titres; b.titresDate = r.date; }
-    bilan.push(Fn_Esc(f.name) + ' : relevé titres du ' + (r.date ? Fmt_Jour(r.date) : '?') + ', ' + r.titres.length + ' ligne(s) avec leur ISIN');
+    try { lignes = Fn_LignesPdfItems(await Fn_PagesPdf(f)); } catch (e) { erreurs.push(Fn_Esc(f.name) + ' : illisible (' + Fn_Esc(e.message) + ')'); continue; }
+    const texte = lignes.map(l => l.items.map(i => i.str).join(' ')).join('\n');
+    if (/RELEVE COMPTE TITRES|Prix de revient fiscal/i.test(texte)) {
+      const t = Fn_LireReleveTitresBourso(lignes.map(l => l.items.map(i => i.str).join(' ')));
+      if (t.erreur || !t.date) { erreurs.push(Fn_Esc(f.name) + ' : relevé titres illisible'); continue; }
+      r.titres[t.date] = t.titres; compte.titres++;
+      if (!b.titresDate || t.date >= b.titresDate) { b.titres = t.titres; b.titresDate = t.date; }
+    } else if (/Brut fiscal/.test(texte)) {
+      const c = Fn_LireReleveCouponsBourso(lignes);
+      if (c.erreur) { erreurs.push(Fn_Esc(f.name) + ' : ' + Fn_Esc(c.erreur)); continue; }
+      if (c.coupons.length) r.coupons[c.coupons.map(x => x.date + x.isin + x.net).join('|')] = c.coupons;
+      compte.coupons++;
+    } else {
+      const e = Fn_LireReleveEspecesBourso(lignes);
+      if (e.erreur) { erreurs.push(Fn_Esc(f.name) + ' : pas un relevé Bourso reconnu'); continue; }
+      if (!e.controle.ok) { erreurs.push(Fn_Esc(f.name) + ' : soldes incohérents (départ + mouvements ≠ nouveau solde) : non importé'); continue; }
+      r.especes[e.debut.date + '|' + e.debut.solde + '|' + e.fin.solde] = { debut: e.debut, fin: e.fin, ops: e.operations };
+      compte.especes++;
+    }
   }
   const cb = Fn_DerniereBourso();
   if (cb) b.isins = Object.assign(b.isins || {}, Fn_IsinsBourso(cb.positions, b.titres, b.mouvements));
+  Var_Memo.histoBoursoCle = null; Var_Memo.lignesCle = null; Var_Memo.histCle = null;
   Fn_Sauver(); Fn_SyncSymboles().catch(() => {});
-  Var_BilanPdf = bilan.join('<br>');
+  Var_BilanPdf = 'Lu : ' + compte.especes + ' relevé(s) espèces, ' + compte.titres + ' relevé(s) titres, ' + compte.coupons + ' relevé(s) de dividendes.'
+    + (erreurs.length ? '<br>' + erreurs.join('<br>') : '');
   Fn_Rendre();
 }
 let Var_BilanPdf = '';   // bilan du dernier import de PDF, affiché jusqu'au rechargement de la page
 function Fn_RendreReleveBourso() {
-  const b = Var_Etat.bourso || {}, cb = Fn_DerniereBourso(), isins = b.isins || {};
-  const sans = cb ? cb.positions.filter(p => !isins[p.nom]) : [];
-  $('releve-bourso-etat').innerHTML = (Var_BilanPdf ? '<div class="note note-ok">' + Var_BilanPdf + '</div>' : '')
-    + '<div class="muet" style="margin-top:6px">' + (b.titresDate ? 'Relevé titres importé : ' + Fmt_Jour(b.titresDate) + '. ' : 'Aucun relevé titres importé. ')
-    + (!cb ? '' : sans.length ? 'Lignes sans ISIN : ' + sans.map(p => Fn_Esc(p.nom)).join(', ') + '.' : 'Toutes les lignes de la dernière capture ont leur ISIN.') + '</div>';
+  const b = Var_Etat.bourso || {}, r = b.releve, h = Fn_HistoBourso(), cb = Fn_DerniereBourso(), isins = b.isins || {};
+  const nb = o => Object.keys((r && r[o]) || {}).length, sans = cb ? cb.positions.filter(p => !isins[p.nom]) : [];
+  const n = h.releves.length;
+  let html = (Var_BilanPdf ? '<div class="note note-ok">' + Var_BilanPdf + '</div>' : '')
+    + '<div class="muet" style="margin-top:6px">' + (n ? n + ' relevé(s) espèces, du ' + Fmt_Jour(h.releves[0].du) + ' au dernier (solde ' + Fmt_Eur(h.releves[n - 1].fin, 2) + ') · '
+      + h.mouvements.length + ' mouvement(s) dans l’historique' : 'Aucun relevé espèces importé : pas d’historique Bourso')
+    + ' · ' + nb('titres') + ' relevé(s) titres · ' + nb('coupons') + ' relevé(s) de dividendes.</div>';
+  if (n) html += h.ruptures.length ? '<div class="note note-warn">Relevé espèces manquant : ' + h.ruptures.map(x => 'entre celui du ' + Fmt_Jour(x.apres) + ' et celui du ' + Fmt_Jour(x.avant)).join(' ; ') + '.</div>'
+    : '<div class="note note-ok">Soldes enchaînés d’un relevé à l’autre : aucun relevé espèces ne manque.</div>';
+  if (cb && sans.length) html += '<div class="muet">Lignes de la capture sans ISIN : ' + sans.map(p => Fn_Esc(p.nom)).join(', ') + ' (importe un relevé titres récent).</div>';
+  if (h.sansIsin.length) html += '<div class="note note-warn">' + h.sansIsin.length + ' action(s) achetée(s) puis revendue(s) entre deux relevés titres : leur ISIN n’est écrit nulle part. '
+    + 'Tape-le (il se trouve sur le site de Bourso ou de l’émetteur), pour que leurs cours comptent dans l’historique :'
+    + h.sansIsin.map(nom => '<div class="rang"><label style="flex:1">' + Fn_Esc(nom) + '</label><input type="text" maxlength="12" size="14" data-isin-b="' + Fn_Esc(nom)
+      + '" placeholder="FR0000000000"></div>').join('') + '<div class="rang"><button id="b-isins-b">Enregistrer les ISIN</button></div></div>';
+  $('releve-bourso-etat').innerHTML = html;
+  if ($('b-isins-b')) $('b-isins-b').onclick = () => {
+    const rr = Fn_ReleveBourso(); let k = 0;
+    document.querySelectorAll('[data-isin-b]').forEach(i => { const v = i.value.trim().toUpperCase(); if (/^[A-Z]{2}[A-Z0-9]{9}\d$/.test(v)) { rr.isins[i.dataset.isinB] = v; k++; } });
+    Var_Memo.histoBoursoCle = null; Var_Memo.lignesCle = null; Fn_Sauver(); Fn_SyncSymboles().catch(() => {});
+    Var_BilanPdf = k + ' ISIN enregistré(s).'; Fn_Rendre(); };
 }
 function Fn_DerniereBourso() { const c = ((Var_Etat.bourso || {}).captures || []); return c.length ? c[c.length - 1] : null; }
 const Fn_BoursoComplete = c => c && c.controle && c.controle.ecart != null && Math.abs(c.controle.ecart) <= Math.max(1, (c.titres || 0) * 0.0005);
@@ -1593,12 +1806,19 @@ function Fn_Historique() {
   if (Var_Memo.histCle !== cle) { Var_Memo.histCle = cle; Var_Memo.hist = Fn_ValeurHistorique(mv, Var_Etat.corrections, Fn_Liens(), id => Fn_CoursEpoque(Fn_Serie(id)), Fn_Fx()); }
   return Var_Memo.hist;
 }
+// Points des captures sur la courbe : celles du compte affiché (aucun dans la vue mélangée : les deux captures n'ont pas lieu au même moment).
+function Fn_PointsCaptures() {
+  const v = Fn_Compte();
+  if (v === 'D') return Var_Etat.captures.filter(c => c.marge && c.marge.vl != null).map(c => ({ t: c.ts, v: c.marge.vl }));
+  if (v === 'B') return ((Var_Etat.bourso || {}).captures || []).filter(c => Fn_BoursoComplete(c) && c.especes != null).map(c => ({ t: c.ts, v: c.titres + c.especes }));
+  return [];
+}
 function Fn_GrapheEvolutionHisto(hist) {
   const zone = $('g-evolution'); zone.innerHTML = '';
   const sous = $('evolution-sous'), leg = $('evolution-legende');
   const T = j => Date.parse(j + 'T12:00:00');
   const pts = hist.jours.map((j, i) => ({ t: T(j), j, v: hist.valeurs[i], est: hist.valeurs[i] > 0 && hist.estimees[i] / hist.valeurs[i] > 0.05 }));
-  const caps = Var_Etat.captures.filter(c => c.marge && c.marge.vl != null).map(c => ({ t: c.ts, v: c.marge.vl }));
+  const caps = Fn_PointsCaptures();
   const tMin = pts[0].t, tMax = Math.max(pts[pts.length - 1].t, caps.length ? caps[caps.length - 1].t : 0);
   // Versements nets cumulés : une marche par versement ou retrait, dans l'ordre des dates.
   const flux = Fn_Flux(Fn_Mouvements(), Var_Etat.corrections).flux.slice().sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
