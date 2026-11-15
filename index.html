@@ -469,7 +469,7 @@ function Fn_Controle(cap) {
    au format JSON de MacroDroid ({lvjson=…} : { "clé" : "texte", … }). Document :
    ===SMART-BOURSO v1 <secondes>=== / ===POSITIONS=== / écrans / ===MOUVEMENTS=== / écrans / ===FIN===
    Une position : « NOM⏎MONTANT euros⏎COURS euros⏎±VAR⏎%⏎PRU euros⏎ / QTÉ », suivie de sa plus-value latente
-   (« 2491,35 euros ») ; l'en-tête donne l'évaluation des titres, le solde espèces et la plus-value latente totale.
+   (« 1234,56 euros ») ; l'en-tête donne l'évaluation des titres, le solde espèces et la plus-value latente totale.
    Les nombres séparent les milliers par une espace fine insécable (U+202F). */
 const Cst_NbBourso = '[+\\-−]?\\d[\\d\\s\\u00a0\\u202f]*(?:,\\d+)?';
 const Cst_ReLigneBourso = new RegExp('^(.+)\\n(' + Cst_NbBourso + ') euros\\n(' + Cst_NbBourso + ') euros\\n([+\\-−]?[\\d,]+)\\n%\\n(' + Cst_NbBourso + ') euros\\n\\s*/\\s*([\\d\\s\\u00a0\\u202f]+)$');
@@ -2686,7 +2686,7 @@ function Fn_AvisAnalyse(r) {
   return { avis, texte: avis.length ? t.slice(0, m.index).trim() : t };
 }
 /* FICHE D'UNE LIGNE dans le rapport : la partie « d) » (les fiches) est découpée à ses titres ### ; la fiche de la ligne est celle
-   dont le titre porte son ISIN, sinon son symbole Yahoo ou son ticker entre parenthèses (« Air Liquide (AI.PA) »), sinon son nom.
+   dont le titre porte son ISIN, sinon son symbole Yahoo ou son ticker entre parenthèses (« Exemple SA (EXA.PA) »), sinon son nom.
    Sans partie « d) », tous les titres ### du rapport sont essayés. */
 function Fn_FicheAnalyse(texte, isin, nom, symboles) {
   const l = String(texte || '').split('\n'), d = l.findIndex(x => /^##\s+d\)/i.test(x));
