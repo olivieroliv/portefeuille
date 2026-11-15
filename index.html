@@ -2214,8 +2214,9 @@ function Fn_RendreStatsCours(pts, pos, ops, ligne) {
       + toutesOps.map((o, k) => [o, k]).reverse().map(([o, k]) => '<tr><td>' + Fmt_Jour(o.date) + '</td><td>' + (o.type === 'achat' ? '▲ achat' : '▼ vente') + (o.ost ? '<div class="muet">' + Fn_Esc(o.ost) + (o.herite ? ' (ancien ISIN)' : '') + '</div>' : '') + '</td><td>' + Fmt_Nb(o.qte, 0) + '</td><td>' + Fmt_Nb(o.prix, 3) + ' ' + Fn_Esc(Cst_DevSymbole[o.dev] || o.dev) + '</td>'
       + (apres ? '<td>' + (apres[k].pru != null ? Fmt_Nb(apres[k].pru, 3) : '<span class="muet">soldée</span>') + '</td>' : '') + '</tr>').join('')
       + '</tbody></table></div></details>' : '')
-    + Fn_HtmlAvis(isin);
+    + Fn_HtmlAvis(isin, nomActuel, [corr, pos && pos.ticker]);
   $('cours-stats').querySelectorAll('.voir-analyse').forEach(l => { l.onclick = e => { e.preventDefault(); Fn_Onglet('analyse'); }; });
+  Fn_MettreEnFormeFiche(isin, nomActuel, [corr, pos && pos.ticker]);
 }
 /* CORRESPONDANCE DEGIRO → YAHOO de toutes les actions, détenues et vendues : le symbole retenu par le robot et le nom de la
    société chez Yahoo, pour vérifier d'un coup d'œil ; une case pour imposer un autre symbole (le robot ne contrôle alors que la
@@ -2394,7 +2395,7 @@ function Fn_DemandeApp(k, sansTete) {
       + 'un titre déjà vendu (« lignes_vendues ») seulement en disant ce qui a changé depuis.',
     '5. PRÉSENTATION :\n'
       + 'a) synthèse en cinq à huit lignes ;\nb) alertes, de la plus importante à la moins importante ;\n'
-      + 'c) tableau : ligne · poids · plus-value · valorisation · consensus · ton avis ;\nd) les fiches ;\ne) le portefeuille entier, puis les idées nouvelles ;\n'
+      + 'c) tableau : ligne · poids · plus-value · valorisation · consensus · ton avis ;\nd) les fiches, chacune sous un titre ### qui donne le nom de la ligne et son ISIN ;\ne) le portefeuille entier, puis les idées nouvelles ;\n'
       + 'f) calendrier des trois prochains mois : résultats, assemblées générales, détachements de dividende ;\ng) sources : titre, site, date, lien.\n'
       + (sansTete ? 'Rédige le rapport complet en une seule réponse, en Markdown (titres ##, listes, tableaux) : personne ne pourra te demander la suite.\n'
           + 'h) Tout à la fin, après les sources, un bloc ```json et rien après : une liste avec une entrée par ligne DÉTENUE, '
@@ -2443,12 +2444,60 @@ function Fn_AvisAnalyse(r) {
   const avis = Array.isArray(l) ? l.filter(x => x && typeof x.isin === 'string' && Cst_Avis[norme(x.avis)]).map(x => ({ isin: x.isin, avis: norme(x.avis), raison: String(x.raison || '') })) : [];
   return { avis, texte: avis.length ? t.slice(0, m.index).trim() : t };
 }
-function Fn_HtmlAvis(isin) {
+/* FICHE D'UNE LIGNE dans le rapport : la partie « d) » (les fiches) est découpée à ses titres ### ; la fiche de la ligne est celle
+   dont le titre porte son ISIN, sinon son symbole Yahoo ou son ticker entre parenthèses (« Air Liquide (AI.PA) »), sinon son nom.
+   Sans partie « d) », tous les titres ### du rapport sont essayés. */
+function Fn_FicheAnalyse(texte, isin, nom, symboles) {
+  const l = String(texte || '').split('\n'), d = l.findIndex(x => /^##\s+d\)/i.test(x));
+  let fin = d < 0 ? -1 : l.findIndex((x, i) => i > d && /^##\s/.test(x));
+  if (fin < 0) fin = l.length;
+  const fiches = []; let f = null;
+  for (let i = d + 1; i < fin; i++) {
+    if (/^###\s/.test(l[i])) { f = { titre: l[i], corps: [] }; fiches.push(f); } else if (f) f.corps.push(l[i]);
+  }
+  const norme = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  const echap = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const n = norme(nom).replace(/\b(sa|se|plc|inc|ag|nv|ltd|corp|spa|adr|on|class)\b/g, ' ').replace(/\s+/g, ' ').trim(), premier = n.split(' ')[0];
+  const t = fiches.find(x => x.titre.includes(isin))
+    || fiches.find(x => symboles.some(s => s && new RegExp('\\(\\s*' + echap(s) + '\\s*[),]', 'i').test(x.titre)))
+    || (n && fiches.find(x => (' ' + norme(x.titre) + ' ').includes(' ' + n + ' ')))
+    || (premier.length >= 4 && fiches.filter(x => (' ' + norme(x.titre) + ' ').includes(' ' + premier + ' ')).length === 1
+      ? fiches.find(x => (' ' + norme(x.titre) + ' ').includes(' ' + premier + ' ')) : null);
+  return t ? { titre: t.titre.replace(/^###\s*(\d+\s*[.)]\s*)?/, ''), corps: t.corps.join('\n').replace(/(\n\s*(-{3,}|\*{3,})\s*)+$/, '').trim() } : null;
+}
+// Markdown du rapport → HTML nettoyé (DOMPurify) ; texte brut si les modules sont injoignables.
+async function Fn_Markdown(texte) {
+  try { const [m, p] = await Promise.all([import(Cst_Marked), import(Cst_Purify)]); return p.default.sanitize(m.marked.parse(texte), { FORBID_TAGS: ['img', 'form', 'input', 'button', 'style'] }); }
+  catch (e) { return '<div style="white-space:pre-wrap">' + Fn_Esc(texte) + '</div>'; }
+}
+function Fn_LiensRapport(zone) {
+  zone.querySelectorAll('a[href]').forEach(l => { l.target = '_blank'; l.rel = 'noopener noreferrer'; });
+  zone.querySelectorAll('table').forEach(t => { const d = document.createElement('div'); d.className = 'defile'; t.replaceWith(d); d.appendChild(t); });
+}
+/* EN BAS DE DÉTAIL, si la dernière analyse réussie a moins de 4 jours : l'avis de Claude sur la ligne, puis sa fiche entière.
+   La fiche est mise en forme après coup (modules Markdown chargés à la demande) dans #detail-fiche. */
+function Fn_HtmlAvis(isin, nom, symboles) {
   const r = ((Var_Etat.analyseRobot || {}).derniers || []).find(x => x.ok);
   if (!r || Date.now() - r.ts_demande > 4 * 86400000) return '';
-  const a = Fn_AvisAnalyse(r).avis.find(x => x.isin === isin);
-  return a ? '<div class="note" style="margin-top:12px"><b>Avis de Claude</b> <span class="muet">(analyse du ' + Fmt_DateHeure(r.ts_demande) + ')</span> : <b>' + Cst_Avis[a.avis] + '</b> — '
-    + Fn_Esc(a.raison) + ' <a href="#" class="voir-analyse">Lire l’analyse complète</a></div>' : '';
+  const lu = Fn_AvisAnalyse(r), a = lu.avis.find(x => x.isin === isin), fiche = Fn_FicheAnalyse(lu.texte, isin, nom, symboles);
+  if (!a && !fiche) return '';
+  return '<div style="margin-top:16px"><h2>Analyse de Claude</h2><div class="muet">Analyse complète du ' + Fmt_DateHeure(r.ts_demande)
+    + ' · <a href="#" class="voir-analyse">Lire l’analyse entière</a></div>'
+    + (a ? '<div class="note" style="margin-top:8px"><b>Avis : ' + Cst_Avis[a.avis] + '</b> — ' + Fn_Esc(a.raison) + '</div>' : '')
+    + (fiche ? '<div class="md" id="detail-fiche" data-isin="' + Fn_Esc(isin) + '" data-ts="' + r.ts_demande + '"><h3>' + Fn_Esc(fiche.titre) + '</h3>'
+      + '<div style="white-space:pre-wrap">' + Fn_Esc(fiche.corps) + '</div></div>' : '')
+    + '</div>';
+}
+async function Fn_MettreEnFormeFiche(isin, nom, symboles) {
+  const zone = $('detail-fiche'), r = ((Var_Etat.analyseRobot || {}).derniers || []).find(x => x.ok);
+  if (!zone || !r) return;
+  const fiche = Fn_FicheAnalyse(Fn_AvisAnalyse(r).texte, isin, nom, symboles);
+  if (!fiche) return;
+  const html = await Fn_Markdown(fiche.corps);
+  const ici = $('detail-fiche');   // l'utilisateur a pu changer de ligne pendant le chargement
+  if (!ici || ici.dataset.isin !== isin || ici.dataset.ts !== String(r.ts_demande)) return;
+  ici.innerHTML = '<h3>' + Fn_Esc(fiche.titre) + '</h3>' + html;
+  Fn_LiensRapport(ici);
 }
 // Avant de lancer : une seule analyse à la fois (bouton grisé pendant), et un avertissement sur le quota de l'abonnement,
 // que le robot ne peut pas lire à l'avance (Claude Code ne le donne pas en mode sans fenêtre) : il voit seulement s'il est épuisé.
@@ -2513,13 +2562,9 @@ async function Fn_RendreAnalyseRobot() {
   if (!r) { zone.innerHTML = echec; return; }
   const entete = echec + '<div class="muet" style="margin-top:8px">Analyse complète du ' + Fmt_DateHeure(r.ts_demande) + ' · '
     + Fn_Esc((Cst_Modeles[r.modele] || { nom: r.modele }).nom) + ' · ' + Math.max(1, Math.round(r.duree_s / 60)) + ' min · sur votre abonnement Claude</div>';
-  let html;
-  const texte = Fn_AvisAnalyse(r).texte;   // sans le bloc des avis, lu à part (onglet Détail)
-  try { const [m, p] = await Promise.all([import(Cst_Marked), import(Cst_Purify)]); html = p.default.sanitize(m.marked.parse(texte), { FORBID_TAGS: ['img', 'form', 'input', 'button', 'style'] }); }
-  catch (e) { html = '<div style="white-space:pre-wrap">' + Fn_Esc(texte) + '</div>'; }   // modules injoignables : texte brut
+  const html = await Fn_Markdown(Fn_AvisAnalyse(r).texte);   // sans le bloc des avis, lu à part (onglet Détail)
   zone.innerHTML = entete + html;
-  zone.querySelectorAll('a[href]').forEach(l => { l.target = '_blank'; l.rel = 'noopener noreferrer'; });
-  zone.querySelectorAll('table').forEach(t => { const d = document.createElement('div'); d.className = 'defile'; t.replaceWith(d); d.appendChild(t); });
+  Fn_LiensRapport(zone);
 }
 function Fn_EstimationAnalyse(web, m) {
   const p = Cst_Modeles[m], entree = (Fn_ConsignesAnalyse(web).length + JSON.stringify(Fn_DonneesAnalyse(Fn_Calculs())).length + 3000) / 3;
