@@ -167,6 +167,15 @@ table.gauche-1 th:first-child, table.gauche-1 td:first-child { text-align: left;
     <details><summary>Valeurs</summary><div class="defile" id="t-evolution"></div></details>
   </section>
 
+  <section class="carte cache" id="c-performance" data-onglet="evolution">
+    <h2>Performance</h2>
+    <div class="choix" id="b-perf-periode" role="group" aria-label="Période"></div>
+    <div class="choix" id="b-perf-unite" role="group" aria-label="En pourcentage ou en euros"></div>
+    <div class="tuiles" id="perf-tuiles"></div>
+    <div class="graphe" id="g-perf" style="margin-top:8px"></div>
+    <div class="muet" id="perf-sous"></div>
+  </section>
+
   <section class="carte" id="c-repartition" data-onglet="accueil">
     <h2>Répartition par ligne</h2>
     <div class="muet">Part de chaque titre dans la valeur des titres, de la plus grosse à la plus petite.</div>
@@ -959,6 +968,32 @@ function Fn_DividendesParAn(mouvements, corrections, liens) {
   });
   return out;
 }
+/* PERFORMANCE D'UNE PÉRIODE, comme la courbe « Performance » de Bourso, depuis le jour `debut` :
+   - en % : rendement pondéré dans le temps (TWR, la méthode de Bourso) — chaque jour, (valeur − versements nets du jour)
+     ÷ valeur de la veille, enchaînés : un versement ou un retrait ne fait ni monter ni baisser la courbe ;
+   - en € : gain depuis le début de la période = valeur − valeur du début − versements nets depuis ;
+   - XIRR de la période : la valeur du début comptée comme un versement, puis les versements et retraits, puis la valeur de fin.
+   jours/valeurs : l'historique (jours ouvrés) ; flux : versements (> 0) et retraits (< 0) en euros, datés. */
+function Fn_Performance(jours, valeurs, flux, debut) {
+  const f = (flux || []).slice().sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+  let i0 = jours.findIndex(j => j >= debut);
+  if (i0 < 0) return null;
+  while (i0 < jours.length && !(valeurs[i0] > 1)) i0++;   // compte encore vide : la période commence au premier euro
+  if (i0 >= jours.length - 1) return null;
+  let k = 0, indice = 1, verse = 0;
+  while (k < f.length && f[k].date <= jours[i0]) k++;   // déjà dans la valeur du début
+  const pct = [0], eur = [0], xflux = [{ t: Fn_JourUtc(jours[i0]), m: -valeurs[i0] }];
+  for (let i = i0 + 1; i < jours.length; i++) {
+    let duJour = 0;
+    while (k < f.length && f[k].date <= jours[i]) { duJour += f[k].montant; xflux.push({ t: Fn_JourUtc(f[k].date), m: -f[k].montant }); k++; }
+    verse += duJour;
+    if (valeurs[i - 1] > 1) indice *= (valeurs[i] - duJour) / valeurs[i - 1];
+    pct.push((indice - 1) * 100); eur.push(valeurs[i] - valeurs[i0] - verse);
+  }
+  const n = jours.length - 1;
+  xflux.push({ t: Fn_JourUtc(jours[n]), m: valeurs[n] });
+  return { i0, pct, eur, verse, xirr: Fn_Xirr(xflux) };
+}
 /* OUTILS COMMUNS DES INDICATEURS (ctx.outils, voir indicateurs.js). fx : { USD: série BCE, GBP: …, … }. */
 function Fn_OutilsIndicateurs(ctx, fx) {
   const valeur = depuis => Fn_ValeurPortefeuilleActuel(ctx.positions, ctx.cours.serie, fx, depuis);
@@ -1327,8 +1362,8 @@ function Fn_GrapheEvolutionHisto(hist) {
 }
 function Fn_GrapheEvolution(k) {
   const hist = Fn_Historique();
-  if (hist && hist.jours.length > 20) { Fn_GrapheEvolutionHisto(hist); Fn_GrapheGainPct(hist); return; }
-  Fn_GrapheGainPct(null);
+  if (hist && hist.jours.length > 20) { Fn_GrapheEvolutionHisto(hist); Fn_GrapheGainPct(hist); Fn_GraphePerformance(hist); return; }
+  Fn_GrapheGainPct(null); Fn_GraphePerformance(null);
   const zone = $('g-evolution'); zone.innerHTML = '';
   const pts = Var_Etat.captures.filter(c => c.marge && c.marge.vl != null).map(c => ({ t: c.ts, v: c.marge.vl, c }));
   const sous = $('evolution-sous'), leg = $('evolution-legende');
@@ -1562,7 +1597,7 @@ const Lire_Local = k => { try { return localStorage.getItem(k) || ''; } catch (e
 const Ecrire_Local = (k, v) => { try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); return true; } catch (e) { return false; } };
 const Fn_Reglages = () => Object.assign({ depot: 'olivieroliv/portefeuille-cours', modele: 'claude-opus-5-5', effort: 'medium' }, Var_Etat.reglages || {});
 let Var_Cours = { sha: null, index: null, series: {}, minute: {}, maj: null, erreur: null, enCours: false };
-let Var_Vue = { isin: null, periode: '1A', resolution: 'jour', ecartUnite: 'pct' };
+let Var_Vue = { isin: null, periode: '1A', resolution: 'jour', ecartUnite: 'pct', perfPeriode: 'tout', perfUnite: 'pct' };
 
 function Fn_Idb() { return new Promise((ok, ko) => { try { const r = indexedDB.open('portefeuille', 1); r.onupgradeneeded = () => r.result.createObjectStore('fichiers'); r.onsuccess = () => ok(r.result); r.onerror = () => ko(r.error); } catch (e) { ko(e); } }); }
 async function Fn_IdbLire(cle) { try { const db = await Fn_Idb(); return await new Promise((ok, ko) => { const r = db.transaction('fichiers').objectStore('fichiers').get(cle); r.onsuccess = () => ok(r.result); r.onerror = () => ko(r.error); }); } catch (e) { return null; } }
@@ -1880,7 +1915,7 @@ function Fn_CourbePct(zone, vals, o) {
       if (Math.abs(v) > pas / 1000) { El('line', { x1: g, x2: W - d, y1: Y(v), y2: Y(v), stroke: 'var(--grille)', 'stroke-width': 1 }, svg);
         Txt({ x: g - 6, y: Y(v) + 4, 'text-anchor': 'end', class: 'axe-txt' }, o.fmt ? o.fmt(v) : (v > 0 ? '+' : '') + Fmt_Nb(v, 0) + ' %', svg); }
     Txt({ x: g - 6, y: Y(0) + 4, 'text-anchor': 'end', class: 'axe-txt' }, o.fmt ? o.fmt(0) : '0 %', svg);
-    (o.etiquettes || []).forEach(([i, txt], k, l) => Txt({ x: X(i), y: H - 5, 'text-anchor': k === 0 ? 'start' : k === l.length - 1 ? 'end' : 'middle', class: 'axe-txt' }, txt, svg));
+    (o.etiquettes || []).forEach(([i, txt], k, l) => Txt({ x: X(i), y: H - 5, 'text-anchor': o.milieu || (k > 0 && k < l.length - 1) ? 'middle' : k === 0 ? 'start' : 'end', class: 'axe-txt' }, txt, svg));
   }
   const y0 = Y(0);
   El('line', { x1: g, x2: W - d, y1: y0, y2: y0, stroke: 'var(--axe)', 'stroke-width': 1.5 }, svg);
@@ -2179,6 +2214,47 @@ function Fn_GrapheGainPct(hist) {
   $('gainpct-sous').textContent = 'Gain du compte en % de l’argent versé, chaque jour, change compris. Aujourd’hui ' + Fmt_Pct(vals[n], 1, true)
     + (vals[pic] != null && pic !== n ? ' ; plus haut sur 12 mois ' + Fmt_Pct(vals[pic], 1, true) + ' le ' + Fmt_Jour(hist.jours[pic]) : '')
     + '. Un versement fait baisser ce % sans perte (l’argent neuf n’a encore rien gagné) ; le XIRR, lui, en tient compte.';
+}
+/* PERFORMANCE (comme Bourso) : période au choix, en % (TWR) ou en € (gain), avec le XIRR de la période. */
+const Cst_PerfPeriodes = [['1M', '1 mois', 1], ['6M', '6 mois', 6], ['1A', '1 an', 12], ['5A', '5 ans', 60], ['tout', 'Tout', null]];
+function Fn_GraphePerformance(hist) {
+  const carte = $('c-performance');
+  if (!hist) { carte.classList.add('cache'); return; }
+  carte.classList.remove('cache');   // affichée avant d'être dessinée : le graphique prend sa largeur
+  const per = Cst_PerfPeriodes.find(p => p[0] === Var_Vue.perfPeriode) || Cst_PerfPeriodes[4], enEur = Var_Vue.perfUnite === 'eur';
+  $('b-perf-periode').innerHTML = Cst_PerfPeriodes.map(p => '<button type="button" data-p="' + p[0] + '" aria-pressed="' + (p === per) + '">' + p[1] + '</button>').join('');
+  $('b-perf-unite').innerHTML = [['pct', '%'], ['eur', '€']].map(([u, l]) => '<button type="button" data-u="' + u + '" aria-pressed="' + ((u === 'eur') === enEur) + '">' + l + '</button>').join('');
+  document.querySelectorAll('#b-perf-periode [data-p]').forEach(b => { b.onclick = () => { Var_Vue.perfPeriode = b.dataset.p; Fn_GraphePerformance(hist); }; });
+  document.querySelectorAll('#b-perf-unite [data-u]').forEach(b => { b.onclick = () => { Var_Vue.perfUnite = b.dataset.u; Fn_GraphePerformance(hist); }; });
+  const n = hist.jours.length - 1, fin = new Date(hist.jours[n] + 'T12:00:00Z');
+  if (per[2]) fin.setUTCMonth(fin.getUTCMonth() - per[2]);
+  const debut = per[2] ? fin.toISOString().slice(0, 10) : hist.jours[0];
+  const p = Fn_Performance(hist.jours, hist.valeurs, Fn_Flux(Fn_Mouvements(), Var_Etat.corrections).flux, debut);
+  const zone = $('g-perf');
+  if (!p) { zone.innerHTML = '<div class="muet" style="padding:16px 0">Pas assez d’historique pour cette période.</div>'; $('perf-tuiles').innerHTML = ''; $('perf-sous').textContent = ''; return; }
+  const jours = hist.jours.slice(p.i0), vals = enEur ? p.eur : p.pct, m = vals.length - 1;
+  const duree = (Fn_JourUtc(jours[m]) - Fn_JourUtc(jours[0])) / 86400000;
+  const tuile = (lib, val, cls, det) => '<div class="tuile"><div class="lib">' + lib + '</div><div class="val ' + (cls || '') + '" style="font-size:16px">' + val + '</div>'
+    + (det ? '<div class="muet" style="font-size:11.5px">' + det + '</div>' : '') + '</div>';
+  $('perf-tuiles').innerHTML = tuile('Performance', Fmt_Pct(p.pct[m], 1, true), Cls_Signe(p.pct[m]), 'hors versements')
+    + tuile('Gain', Fmt_Signe(p.eur[m]), Cls_Signe(p.eur[m]), 'versé sur la période : ' + Fmt_Eur(p.verse))
+    + tuile('XIRR', duree >= 365 && p.xirr != null ? Fmt_Pct(p.xirr * 100, 1, true) + ' / an' : '—', duree >= 365 ? Cls_Signe(p.xirr) : '',
+      duree >= 365 ? 'rendement annuel' : 'sur un an ou plus seulement');
+  // Étiquettes : les années sur une longue période, sinon les mois (au plus six).
+  const etiq = [];
+  if (duree > 500) jours.forEach((j, i) => { if (i > 0 && j.slice(0, 4) !== jours[i - 1].slice(0, 4)) etiq.push([i, j.slice(0, 4)]); });
+  else {
+    const debuts = []; jours.forEach((j, i) => { if (i > 0 && j.slice(0, 7) !== jours[i - 1].slice(0, 7)) debuts.push(i); });
+    const pas = Math.ceil(debuts.length / 6);
+    debuts.forEach((i, k) => { if (k % pas === 0) etiq.push([i, Cst_MoisCourts[Number(jours[i].slice(5, 7)) - 1]]); });
+  }
+  const fmtEur = v => (v > 0 ? '+' : '') + Fmt_Compact(v);
+  Fn_CourbePct(zone, vals, { H: 200, axes: true, id: 'perf', etiquettes: etiq, milieu: true, fmt: enEur ? fmtEur : null,
+    titre: 'Performance du compte depuis le ' + Fmt_Jour(jours[0]) + (enEur ? ', gain en euros' : ', en pourcentage'),
+    bulle: i => '<b>' + Fmt_Jour(jours[i]) + '</b><br>Performance ' + Fmt_Pct(p.pct[i], 1, true) + '<br>Gain ' + Fmt_Signe(p.eur[i]) + '<br>Valeur ' + Fmt_Eur(hist.valeurs[p.i0 + i]) });
+  $('perf-sous').textContent = 'Depuis le ' + Fmt_Jour(jours[0]) + '. En % : rendement pondéré dans le temps (méthode « TWR », celle de Bourso) — un versement ou un retrait '
+    + 'ne fait ni monter ni baisser la courbe. En € : gain depuis le début de la période (valeur − valeur du début − versements nets). '
+    + 'XIRR : rendement annuel de votre argent, versements compris à leur date. Valeurs reconstituées chaque jour ouvré à la clôture.';
 }
 // Sous le cours d'une ligne : les distributions et divisions prises en compte, et celles que le relevé ne confirme pas.
 function Fn_HtmlDivisions(isin, ligne) {
