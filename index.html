@@ -150,6 +150,16 @@ table.gauche-1 th:first-child, table.gauche-1 td:first-child { text-align: left;
 
   <section id="v-synthese" data-onglet="accueil"></section>
 
+  <section class="carte cache" id="c-bourso" data-onglet="accueil">
+    <h2>Compte Bourso <span class="marque-b" title="BoursoBank">B</span></h2>
+    <div class="muet" id="bourso-sous"></div>
+    <div class="tuiles" id="bourso-tuiles"></div>
+    <div class="defile" id="t-bourso"></div>
+    <div id="bourso-mv"></div>
+    <div class="muet" style="margin-top:8px">Pour l’instant, ces lignes restent à part : elles ne comptent pas encore dans les totaux, l’historique ni les
+      indicateurs, qui ne portent que sur DEGIRO.</div>
+  </section>
+
   <section class="carte" id="c-indicateurs" data-onglet="accueil">
     <h2>Indicateurs</h2>
     <div class="muet">Chaque indicateur compare sa valeur à deux seuils (réglables dans l’onglet Réglages) : ✓ bon · ! à surveiller · ✕ alerte. « En attente » : il manque une donnée (relevé de compte ou cours). Touchez un indicateur pour son explication.</div>
@@ -217,16 +227,6 @@ table.gauche-1 th:first-child, table.gauche-1 td:first-child { text-align: left;
     <div class="muet" id="ecarts-tous-sous"></div>
     <div class="muet" style="margin-top:14px">Une ligne par graphique, chacune à sa propre échelle — bleu au-dessus de 0 : en gain · rouge en dessous : en perte · ▲ : un achat, qui déplace le PRU.</div>
     <div class="multiples" id="g-ecarts"></div>
-  </section>
-
-  <section class="carte cache" id="c-bourso" data-onglet="accueil">
-    <h2>Compte Bourso <span class="marque-b" title="BoursoBank">B</span></h2>
-    <div class="muet" id="bourso-sous"></div>
-    <div class="tuiles" id="bourso-tuiles"></div>
-    <div class="defile" id="t-bourso"></div>
-    <div id="bourso-mv"></div>
-    <div class="muet" style="margin-top:8px">Pour l’instant, ces lignes restent à part : elles ne comptent pas encore dans les totaux, l’historique ni les
-      indicateurs, qui ne portent que sur DEGIRO.</div>
   </section>
 
   <section class="carte" id="c-positions" data-onglet="accueil">
@@ -1200,9 +1200,10 @@ function Fn_BilanBourso(r) {
   if (!r.ok) { Fn_NoteReception('crit', '<b>Capture Bourso non intégrée.</b> ' + Fn_Esc(r.message)); return; }
   const c = r.cap, k = c.controle, complet = Fn_BoursoComplete(c);
   Fn_NoteReception(complet ? 'ok' : 'warn', '<b>Capture Bourso du ' + Fn_Esc(Fmt_DateHeure(c.ts)) + ' intégrée</b> — ' + c.positions.length + ' ligne(s)'
-    + (complet ? ', somme des lignes = évaluation des titres.'
-      : k.ecran == null ? '. L’évaluation des titres n’a pas été lue : impossible de vérifier qu’il ne manque pas de ligne.'
-      : '. <b>Il manque sans doute une ligne</b> : somme ' + Fn_Esc(Fmt_Eur(k.somme, 2)) + ' pour ' + Fn_Esc(Fmt_Eur(k.ecran, 2)) + ' à l’écran. Relance la capture en faisant glisser plus lentement.')
+    + (complet ? ', somme des lignes = évaluation des titres. Tes lignes sont dans la carte « Compte Bourso » juste en dessous.'
+      : k.ecran == null ? '. L’évaluation des titres n’a pas été lue (le haut du compte-titres n’était pas à l’écran) : impossible de vérifier qu’il ne manque pas de ligne.'
+      : '. <b>Il manque des lignes</b> : somme ' + Fn_Esc(Fmt_Eur(k.somme, 2)) + ' pour ' + Fn_Esc(Fmt_Eur(k.ecran, 2)) + ' à l’écran. Relance la capture et, '
+        + 'pendant les 5 secondes de lecture, fais glisser la liste jusqu’à la dernière ligne.')
     + (r.lus ? ' ' + r.lus + ' mouvement(s) lu(s), dont ' + r.nouveaux + ' nouveau(x).' : ''));
 }
 function Fn_NoteReception(type, html) { $('reception').innerHTML = '<div class="note note-' + type + '">' + html + '</div>'; }
@@ -1656,7 +1657,7 @@ function Fn_RendreBourso() {
   const k = c.controle, complet = Fn_BoursoComplete(c);
   $('bourso-sous').innerHTML = 'Capture du ' + Fn_Esc(Fmt_DateHeure(c.ts)) + ' · ' + c.positions.length + ' ligne(s) · '
     + (complet ? 'somme des lignes = évaluation des titres ✓'
-      : '<b>il manque sans doute une ligne</b> (somme ' + Fn_Esc(Fmt_Eur(k.somme, 2)) + ' pour ' + Fn_Esc(Fmt_Eur(k.ecran, 2)) + ' à l’écran) : relance la capture en faisant glisser plus lentement');
+      : '<b>il manque sans doute une ligne</b> (somme ' + Fn_Esc(Fmt_Eur(k.somme, 2)) + ' pour ' + Fn_Esc(Fmt_Eur(k.ecran, 2)) + ' à l’écran) : relance la capture et fais glisser jusqu’à la dernière ligne pendant les 5 secondes de lecture');
   const tuile = (lib, val, cls) => '<div class="tuile"><div class="lib">' + lib + '</div><div class="val ' + (cls || '') + '" style="font-size:16px">' + val + '</div></div>';
   const total = c.titres != null && c.especes != null ? c.titres + c.especes : null;
   $('bourso-tuiles').innerHTML = tuile('Valeur des titres', Fmt_Eur(c.titres)) + tuile('Espèces', Fmt_Eur(c.especes, 2))
