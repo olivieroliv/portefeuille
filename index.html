@@ -44,7 +44,6 @@ h2 { font-size: 16px; margin: 0 0 4px; }
 .sous { color: var(--encre-2); font-size: 13px; }
 .muet { color: var(--muet); font-size: 12.5px; }
 .calcul { margin: 8px 0 4px; padding-left: 18px; } .calcul li { margin: 2px 0; }
-.marque-b { display: inline-block; font-size: 11px; font-weight: 700; line-height: 1; padding: 3px 5px; border-radius: 5px; border: 1px solid var(--bord); color: var(--encre-2); vertical-align: 2px; }
 .carte { background: var(--surface); border: 1px solid var(--bord); border-radius: 12px; padding: 14px; margin: 12px 0; }
 .heros-lib { color: var(--encre-2); font-size: 13px; }
 .heros { font-size: 48px; font-weight: 600; line-height: 1.1; margin: 2px 0 10px; }
@@ -145,20 +144,13 @@ table.gauche-1 th:first-child, table.gauche-1 td:first-child { text-align: left;
     <button type="button" role="tab" data-onglet="releve">Relevé</button>
     <button type="button" role="tab" data-onglet="reglages" aria-label="Réglages" title="Réglages">⚙</button>
   </nav>
+  <div class="choix cache" id="b-compte" role="group" aria-label="Compte affiché"></div>
+  <div id="compte-note"></div>
   <div id="alerte-stockage"></div>
   <div id="reception"></div>
 
   <section id="v-synthese" data-onglet="accueil"></section>
 
-  <section class="carte cache" id="c-bourso" data-onglet="accueil">
-    <h2>Compte Bourso <span class="marque-b" title="BoursoBank">B</span></h2>
-    <div class="muet" id="bourso-sous"></div>
-    <div class="tuiles" id="bourso-tuiles"></div>
-    <div class="defile" id="t-bourso"></div>
-    <div id="bourso-mv"></div>
-    <div class="muet" style="margin-top:8px">Pour l’instant, ces lignes restent à part : elles ne comptent pas encore dans les totaux, l’historique ni les
-      indicateurs, qui ne portent que sur DEGIRO.</div>
-  </section>
 
   <section class="carte" id="c-indicateurs" data-onglet="accueil">
     <h2>Indicateurs</h2>
@@ -300,6 +292,17 @@ table.gauche-1 th:first-child, table.gauche-1 td:first-child { text-align: left;
     <div id="releve-etat"></div>
     <div class="rang">
       <label class="btn">Importer un relevé (CSV)<input type="file" accept=".csv,text/csv,text/comma-separated-values" multiple id="f-releve" class="cache"></label>
+    </div>
+  </section>
+
+  <section class="carte" id="c-releve-bourso" data-onglet="releve">
+    <h2>Relevés Bourso</h2>
+    <div class="muet">Les relevés PDF de BoursoBank, lus ici même (rien n’est envoyé ; nom, adresse et numéros de compte sont ignorés).
+      Le <b>relevé titres</b> donne l’ISIN de chaque ligne du compte-titres : c’est lui qui permet d’avoir leurs cours.
+      Les relevés de compte et de coupons (historique, dividendes) viendront à l’étape suivante.</div>
+    <div id="releve-bourso-etat"></div>
+    <div class="rang">
+      <label class="btn">Importer des relevés Bourso (PDF)<input type="file" accept=".pdf,application/pdf" multiple id="f-releve-bourso" class="cache"></label>
     </div>
   </section>
 
@@ -524,6 +527,46 @@ function Fn_LireCaptureBourso(texte) {
   const somme = pos.reduce((s, p) => s + (p.valeur || 0), 0);
   return { ts: Number(mH[1]) * 1000, positions: pos, titres, especes, plLat: plLatTotal, mouvements: [...mouvements.values()],
     controle: { somme, ecran: titres, ecart: titres != null ? somme - titres : null, ecrans: ecransPos.length, ecransMv: ecransMv.length } };
+}
+/* TEXTE D'UN PDF, LIGNE PAR LIGNE. pdf.js rend des morceaux de texte placés (x, y) ; on les regroupe par ligne
+   (même hauteur, à 2 points près), de haut en bas, et de gauche à droite dans une ligne. pages : [[{ str, x, y }]]. */
+function Fn_LignesPdf(pages) {
+  const out = [];
+  (pages || []).forEach(items => {
+    const lignes = [];
+    items.filter(it => String(it.str).trim()).slice().sort((a, b) => b.y - a.y || a.x - b.x).forEach(it => {
+      const l = lignes.find(x => Math.abs(x.y - it.y) <= 2);
+      if (l) l.items.push(it); else lignes.push({ y: it.y, items: [it] });
+    });
+    lignes.sort((a, b) => b.y - a.y).forEach(l => out.push(l.items.sort((a, b) => a.x - b.x).map(it => String(it.str).trim()).join(' ').replace(/\s+/g, ' ')));
+  });
+  return out;
+}
+/* RELEVÉ TITRES BOURSO (PDF mensuel) : chaque ligne détenue s'écrit « 1 234 NOM DE LA VALEUR (FR0000000000) ».
+   Sert à connaître l'ISIN des lignes du compte-titres, que l'appli n'affiche pas dans la liste. */
+function Fn_LireReleveTitresBourso(lignes) {
+  const texte = (lignes || []).join('\n');
+  if (!/RELEVE COMPTE TITRES|Prix de revient fiscal/i.test(texte)) return { erreur: 'Ce PDF n’est pas un relevé titres Bourso.' };
+  const titres = [], re = /(?:^|\s)(\d{1,3}(?:[\s  ]\d{3})*)\s+([A-Z0-9][^()\n]*?)\s*\(([A-Z]{2}[A-Z0-9]{9}\d)\)/g;
+  let m;
+  while ((m = re.exec(texte))) titres.push({ qte: Number(m[1].replace(/[\s  ]/g, '')), nom: m[2].trim(), isin: m[3] });
+  const d = /Valoris\S* au (\d{2})\/(\d{2})\/(\d{4})/.exec(texte);
+  return { date: d ? d[3] + '-' + d[2] + '-' + d[1] : null, titres };
+}
+/* ISIN DES LIGNES BOURSO : l'appli les nomme autrement que les relevés (« ALPHA ET BETA » / « ALPHA BETA »,
+   « GAMMA » / « GAMMA SE »). Une ligne prend l'ISIN d'un titre du relevé (ou d'un mouvement) qui a la
+   même quantité et un mot du nom en commun, sinon le même nom (au sens de Fn_MemeNom), sinon le même premier mot. */
+function Fn_IsinsBourso(positions, titres, mouvements) {
+  const out = {}, mots = n => Fn_NomCourt(n).split(' ').filter(w => w.length >= 3);
+  const commun = (a, b) => mots(a).some(w => mots(b).includes(w));
+  (positions || []).forEach(p => {
+    let t = (titres || []).find(x => x.qte === p.qte && commun(x.nom, p.nom))
+      || (titres || []).find(x => Fn_MemeNom(Fn_NomCourt(x.nom), Fn_NomCourt(p.nom)))
+      || (mouvements || []).find(x => x.isin && x.nom && Fn_MemeNom(Fn_NomCourt(x.nom), Fn_NomCourt(p.nom)));
+    if (!t) { const p1 = mots(p.nom)[0], c = (titres || []).filter(x => mots(x.nom)[0] === p1); if (p1 && c.length === 1) t = c[0]; }
+    if (t) out[p.nom] = t.isin;
+  });
+  return out;
 }
 // Date locale « AAAA-MM-JJ » (jamais toISOString : après minuit, l'heure universelle donne la veille).
 function Fn_Jour(ts) {
@@ -944,16 +987,26 @@ function Fn_VersementsProbables(captures, mouvements, corrections) {
   return out;
 }
 /* LIGNES DU COMPTE DANS LE TEMPS, depuis le relevé : quantité et PRU après chaque opération. PRU = prix moyen pondéré
-   des achats, frais exclus ; une vente ne le change pas ; une ligne soldée repart de zéro ; actions gratuites à 0 €.
+   des achats, frais exclus (sauf avecFrais) ; une vente ne le change pas ; une ligne soldée repart de zéro ; actions gratuites à 0 €.
    C'est le calcul de DEGIRO : vérifié sur les 18 lignes d'un compte réel, au millième près. Les fonds monétaires
    (transferts internes) n'en sont pas : leur argent reste compté dans les liquidités. */
-function Fn_Lignes(mouvements, corrections, liens) {
+/* avecFrais (choix de l'utilisateur, 16/11/2026 : « frais partout », comme Bourso et comme le prix de revient fiscal) :
+   les frais d'un ACHAT (courtage, taxe sur les transactions, frais de change de cet ordre — même numéro d'ordre, sinon
+   même date et même heure) s'ajoutent à son coût ; ceux d'une vente, non. Sans avecFrais : le PRU de DEGIRO. */
+function Fn_Lignes(mouvements, corrections, liens, avecFrais) {
   const remplaces = new Set((liens || []).map(l => l.de));
   const utiles = (mouvements || []).filter(m => Fn_Classer(m, corrections) !== 'interne');
   const isins = [...new Set(utiles.filter(m => /^[A-Z]{2}[A-Z0-9]{9}\d$/.test(m.isin || '') && !remplaces.has(m.isin)).map(m => m.isin))];
   // PRU EN EUROS, change compris : chaque achat compté pour les euros réellement payés (taux de SA conversion dans
   // le relevé). C'est lui qui donne la plus-value en euros de DEGIRO pour une ligne en dollars, francs ou pence.
   const taux = Fn_Taux(mouvements, corrections);
+  const vers = {}; (liens || []).forEach(l => { vers[l.de] = l.vers; });
+  const frais = !avecFrais ? [] : utiles.filter(m => m.isin && /^(frais_courtage|frais_change|taxe|frais)$/.test(Fn_Classer(m, corrections)))
+    .map(m => ({ isin: vers[m.isin] || m.isin, ordre: m.ordre || '', quand: m.date + ' ' + (m.heure || ''),
+      v: m.dev === 'EUR' ? m.montant : ((Fn_EnEuros(m, taux) || {}).v), pris: false }));
+  const fraisDe = (isin, o) => { let f = 0;
+    frais.forEach(x => { if (!x.pris && x.isin === isin && x.v != null && ((o.ordre && x.ordre === o.ordre) || x.quand === o.date + ' ' + (o.heure || ''))) { x.pris = true; f -= x.v; } });
+    return f; };   // en euros, positif
   const out = {};
   isins.forEach(isin => {
     const ops = Fn_Operations(utiles, isin, liens);
@@ -962,6 +1015,10 @@ function Fn_Lignes(mouvements, corrections, liens) {
     const etats = [], apres = [];
     ops.forEach(o => {
       const eur = o.devMontant === 'EUR' ? { v: o.montant } : Fn_EnEuros({ dev: o.devMontant, montant: o.montant, date: o.date, heure: o.heure }, taux);
+      if (o.type === 'achat' && avecFrais) {
+        const f = fraisDe(isin, o);   // en euros ; dans la devise du titre au taux de l'opération elle-même
+        cout += f && eur && eur.v ? f * o.qte * o.prix / -eur.v : (o.dev === 'EUR' ? f : 0); coutEur += f;
+      }
       if (o.type === 'achat') { cout += o.qte * o.prix; if (eur) coutEur -= eur.v; else eurOk = false; q += o.qte; }
       else { if (q > 0) { cout -= o.qte * cout / q; coutEur -= o.qte * coutEur / q; } q -= o.qte; if (q <= 1e-9) { q = 0; cout = 0; coutEur = 0; eurOk = true; } }
       const e = { date: o.date, qte: q, pru: q > 0 ? cout / q : null, pruEur: q > 0 && eurOk ? coutEur / q : null, prix: o.prix, dev: o.dev };
@@ -1160,8 +1217,78 @@ const Fmt_Compact = v => (Math.abs(v) >= 10000 ? new Intl.NumberFormat('fr-FR', 
 const Fmt_Signe = v => (v > 0 ? '+' : '') + Fmt_Eur(v);
 const Cls_Signe = v => v == null ? '' : v >= 0 ? 'pos' : 'neg';
 
-function Fn_Derniere() { for (let i = Var_Etat.captures.length - 1; i >= 0; i--) if (Var_Etat.captures[i].positions) return Var_Etat.captures[i]; return null; }
-function Fn_Mouvements() { return Var_Etat.releve ? Var_Etat.releve.mouvements : []; }
+/* COMPTE AFFICHÉ (choix de l'utilisateur, 16/11/2026) : « D » DEGIRO, « B » Bourso, « DB » les deux mélangés. Toute la page
+   lit la capture par Fn_Derniere() et le relevé par Fn_Mouvements() : ce sont eux qui suivent le choix, au format DEGIRO.
+   Bourso est converti dans ce format ; dans la vue mélangée seulement, chaque nom porte sa marque (« ALPHA B »,
+   « GAMMA D ») et une action détenue chez les deux tient sur une ligne « NOM D+B ». */
+function Fn_DerniereDegiro() { for (let i = Var_Etat.captures.length - 1; i >= 0; i--) if (Var_Etat.captures[i].positions) return Var_Etat.captures[i]; return null; }
+function Fn_MouvementsDegiro() { return Var_Etat.releve ? Var_Etat.releve.mouvements : []; }
+// Historique Bourso : les relevés de compte importés (étape suivante), convertis au format du relevé DEGIRO.
+const Fn_MouvementsBourso = () => ((Var_Etat.bourso || {}).releve || {}).mouvements || [];
+function Fn_Compte() {
+  const d = !!Fn_DerniereDegiro() || Fn_MouvementsDegiro().length > 0, b = !!Fn_DerniereBourso();
+  if (!b) return 'D'; if (!d) return 'B';
+  const v = (Var_Etat.reglages || {}).compte;
+  return v === 'D' || v === 'B' ? v : 'DB';
+}
+// Sans les relevés Bourso, l'historique d'une vue avec Bourso serait faux (versements, achats d'avant la capture inconnus).
+const Fn_HistoireIncomplete = () => Fn_Compte() !== 'D' && !Fn_MouvementsBourso().length;
+function Fn_Mouvements() {
+  const v = Fn_Compte(), d = Fn_MouvementsDegiro(), b = Fn_MouvementsBourso();
+  if (v === 'D') return d;
+  if (v === 'B') return b;
+  return b.length ? d.concat(b).sort((x, y) => (x.date + x.heure) < (y.date + y.heure) ? -1 : (x.date + x.heure) > (y.date + y.heure) ? 1 : 0) : d;
+}
+/* Lignes DEGIRO de la capture, PRU FRAIS COMPRIS (choix « frais partout ») : PRU et plus-value recalculés sur le relevé,
+   frais d'achat ajoutés. Si le relevé n'est pas à jour pour une ligne (quantité différente), le PRU de DEGIRO est gardé. */
+function Fn_PositionsDegiroFrais(c) {
+  const mv = Fn_MouvementsDegiro();
+  if (!mv.length) return c.positions;
+  const cle = mv.length + '|' + mv[mv.length - 1].cle + '|' + JSON.stringify(Var_Etat.corrections || {});
+  if (Var_Memo.fraisCle !== cle) { Var_Memo.fraisCle = cle; Var_Memo.lignesFrais = Fn_Lignes(mv, Var_Etat.corrections, Fn_LiensIsin(mv), true); }
+  return c.positions.map(p => {
+    const l = Var_Memo.lignesFrais[p.isin], e = l && l.apres[l.apres.length - 1];
+    if (!e || e.qte !== p.qte || !(e.pru > 0)) return p;
+    const cout = e.pruEur != null ? e.pruEur * p.qte : (p.dev === 'EUR' ? e.pru * p.qte : null);
+    const plLat = cout != null ? p.valeur - cout : p.plLat;
+    return Object.assign({}, p, { pru: e.pru, plLat, plPct: cout > 0 ? plLat / cout * 100 : p.plPct, pruDegiro: p.pru, plLatDegiro: p.plLat });
+  });
+}
+// Lignes Bourso au format DEGIRO (PRU de Bourso : frais compris). Sans ISIN connu, un identifiant « BOURSO:nom » (pas de cours).
+function Fn_PositionsBourso(cb) {
+  const isins = (Var_Etat.bourso || {}).isins || {};
+  return cb.positions.map(p => {
+    const cout = p.qte * p.pru, plJour = p.varJour != null && p.valeur != null ? p.valeur - p.valeur / (1 + p.varJour / 100) : null;
+    return { isin: isins[p.nom] || 'BOURSO:' + p.nom, nom: p.nom, ticker: '', dev: 'EUR', cours: p.cours, qte: p.qte, valeur: p.valeur, pru: p.pru,
+      plJour, plLat: p.plLat, plPct: cout > 0 && p.plLat != null ? p.plLat / cout * 100 : null, total: null, fx: 1, courtier: 'B' };
+  });
+}
+function Fn_CaptureBourso(cb) {
+  return { ts: cb.ts, compte: 'bourso', positions: Fn_PositionsBourso(cb), nonLues: [], controle: cb.controle, bourso: true,
+    marge: { titres: cb.titres, cash: cb.especes, vl: cb.titres != null && cb.especes != null ? cb.titres + cb.especes : null } };
+}
+// Vue mélangée : marque D / B en fin de nom ; même ISIN (et même devise) chez les deux → une ligne « D+B », PRU moyen pondéré.
+function Fn_Melanger(D, B) {
+  const out = D.positions.map(p => Object.assign({}, p, { nom: p.nom + ' D', nomSeul: p.nom }));
+  B.positions.forEach(p => {
+    const i = out.findIndex(x => x.isin === p.isin && x.courtier === 'D' && x.dev === p.dev);
+    if (i < 0) { out.push(Object.assign({}, p, { nom: p.nom + ' B', nomSeul: p.nom })); return; }
+    const a = out[i], q = a.qte + p.qte, valeur = a.valeur + p.valeur, plLat = (a.plLat || 0) + (p.plLat || 0), cout = valeur - plLat;
+    out[i] = Object.assign({}, a, { nom: a.nomSeul + ' D+B', courtier: 'DB', qte: q, valeur, pru: q ? (a.qte * a.pru + p.qte * p.pru) / q : null, plLat,
+      plPct: cout > 0 ? plLat / cout * 100 : null, plJour: (a.plJour || 0) + (p.plJour || 0), parCourtier: [a, p] });
+  });
+  const somme = k => D.marge[k] != null && B.marge[k] != null ? D.marge[k] + B.marge[k] : null;
+  const titres = (D.marge.titres != null ? D.marge.titres : D.positions.reduce((s, p) => s + p.valeur, 0)) + (B.marge.titres || 0);
+  return Object.assign({}, D, { positions: out, marge: { titres, cash: somme('cash'), vl: somme('vl') }, tsBourso: B.ts, melange: true });
+}
+function Fn_Derniere() {
+  const v = Fn_Compte(), d = Fn_DerniereDegiro(), cb = Fn_DerniereBourso();
+  const D = d ? Object.assign({}, d, { positions: Fn_PositionsDegiroFrais(d).map(p => Object.assign({ courtier: 'D' }, p)) }) : null;
+  const B = cb ? Fn_CaptureBourso(cb) : null;
+  if (v === 'D') return D;
+  if (v === 'B') return B;
+  return D && B ? Fn_Melanger(D, B) : (D || B);
+}
 
 /* ---------- intégration d'une capture ---------- */
 function Fn_Integrer(texte, source) {
@@ -1191,8 +1318,47 @@ function Fn_IntegrerBourso(texte, source) {
   let nouveaux = 0;
   cap.mouvements.forEach(m => { if (!vus.has(cle(m))) { b.mouvements.push(m); vus.add(cle(m)); nouveaux++; } });
   b.mouvements.sort((x, y) => x.date < y.date ? -1 : x.date > y.date ? 1 : 0);
+  b.isins = Object.assign(b.isins || {}, Fn_IsinsBourso(cap.positions, b.titres, b.mouvements));
   Fn_Sauver();
   return { ok: true, bourso: true, cap: enr, nouveaux, lus: cap.mouvements.length };
+}
+/* RELEVÉS BOURSO EN PDF, lus dans le navigateur avec pdf.js (chargé à la demande depuis jsDelivr ; le fichier ne quitte
+   pas l'appareil). Étape 1 : le relevé titres (ISIN des lignes). Les relevés de compte et de coupons : étape suivante. */
+const Cst_PdfJs = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.min.mjs', Cst_PdfJsWorker = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs';
+async function Fn_TextePdf(fichier) {
+  const pdfjs = await import(Cst_PdfJs);
+  pdfjs.GlobalWorkerOptions.workerSrc = Cst_PdfJsWorker;
+  const doc = await pdfjs.getDocument({ data: new Uint8Array(await fichier.arrayBuffer()) }).promise, pages = [];
+  for (let i = 1; i <= doc.numPages; i++) {
+    const t = await (await doc.getPage(i)).getTextContent();
+    pages.push(t.items.map(it => ({ str: it.str, x: it.transform[4], y: it.transform[5] })));
+  }
+  return Fn_LignesPdf(pages);
+}
+async function Fn_ImporterPdfBourso(fichiers) {
+  const etat = $('releve-bourso-etat'), b = Var_Etat.bourso = Var_Etat.bourso || { captures: [], mouvements: [] }, bilan = [];
+  etat.innerHTML = '<div class="note">Lecture de ' + fichiers.length + ' PDF…</div>';
+  for (const f of fichiers) {
+    let lignes;
+    try { lignes = await Fn_TextePdf(f); } catch (e) { bilan.push(Fn_Esc(f.name) + ' : illisible (' + Fn_Esc(e.message) + ')'); continue; }
+    const r = Fn_LireReleveTitresBourso(lignes);
+    if (r.erreur) { bilan.push(Fn_Esc(f.name) + ' : ' + (/Relev[ée] de compte|Extrait de votre compte|COUPON/i.test(lignes.join(' ')) ? 'relevé de compte ou de coupons : pris en charge à l’étape suivante' : Fn_Esc(r.erreur))); continue; }
+    if (!b.titres || !b.titresDate || (r.date || '') >= b.titresDate) { b.titres = r.titres; b.titresDate = r.date; }
+    bilan.push(Fn_Esc(f.name) + ' : relevé titres du ' + (r.date ? Fmt_Jour(r.date) : '?') + ', ' + r.titres.length + ' ligne(s) avec leur ISIN');
+  }
+  const cb = Fn_DerniereBourso();
+  if (cb) b.isins = Object.assign(b.isins || {}, Fn_IsinsBourso(cb.positions, b.titres, b.mouvements));
+  Fn_Sauver(); Fn_SyncSymboles().catch(() => {});
+  Var_BilanPdf = bilan.join('<br>');
+  Fn_Rendre();
+}
+let Var_BilanPdf = '';   // bilan du dernier import de PDF, affiché jusqu'au rechargement de la page
+function Fn_RendreReleveBourso() {
+  const b = Var_Etat.bourso || {}, cb = Fn_DerniereBourso(), isins = b.isins || {};
+  const sans = cb ? cb.positions.filter(p => !isins[p.nom]) : [];
+  $('releve-bourso-etat').innerHTML = (Var_BilanPdf ? '<div class="note note-ok">' + Var_BilanPdf + '</div>' : '')
+    + '<div class="muet" style="margin-top:6px">' + (b.titresDate ? 'Relevé titres importé : ' + Fmt_Jour(b.titresDate) + '. ' : 'Aucun relevé titres importé. ')
+    + (!cb ? '' : sans.length ? 'Lignes sans ISIN : ' + sans.map(p => Fn_Esc(p.nom)).join(', ') + '.' : 'Toutes les lignes de la dernière capture ont leur ISIN.') + '</div>';
 }
 function Fn_DerniereBourso() { const c = ((Var_Etat.bourso || {}).captures || []); return c.length ? c[c.length - 1] : null; }
 const Fn_BoursoComplete = c => c && c.controle && c.controle.ecart != null && Math.abs(c.controle.ecart) <= Math.max(1, (c.titres || 0) * 0.0005);
@@ -1200,7 +1366,7 @@ function Fn_BilanBourso(r) {
   if (!r.ok) { Fn_NoteReception('crit', '<b>Capture Bourso non intégrée.</b> ' + Fn_Esc(r.message)); return; }
   const c = r.cap, k = c.controle, complet = Fn_BoursoComplete(c);
   Fn_NoteReception(complet ? 'ok' : 'warn', '<b>Capture Bourso du ' + Fn_Esc(Fmt_DateHeure(c.ts)) + ' intégrée</b> — ' + c.positions.length + ' ligne(s)'
-    + (complet ? ', somme des lignes = évaluation des titres. Tes lignes sont dans la carte « Compte Bourso » juste en dessous.'
+    + (complet ? ', somme des lignes = évaluation des titres. Tes lignes Bourso sont dans les positions : choisis « Bourso » ou « Les deux » en haut de la page.'
       : k.ecran == null ? '. L’évaluation des titres n’a pas été lue (le haut du compte-titres n’était pas à l’écran) : impossible de vérifier qu’il ne manque pas de ligne.'
       : '. <b>Il manque des lignes</b> : somme ' + Fn_Esc(Fmt_Eur(k.somme, 2)) + ' pour ' + Fn_Esc(Fmt_Eur(k.ecran, 2)) + ' à l’écran. Relance la capture et, '
         + 'pendant les 5 secondes de lecture, fais glisser la liste jusqu’à la dernière ligne.')
@@ -1220,7 +1386,7 @@ function Fn_Alertes(c) {
 function Fn_BilanReception(r) {
   if (!r.ok) { Fn_NoteReception('crit', '<b>Capture non intégrée.</b> ' + Fn_Esc(r.message)); return; }
   const a = Fn_Alertes(r.cap);
-  const v = Fn_VersementsProbables(Var_Etat.captures, Fn_Mouvements(), Var_Etat.corrections).filter(x => x.au === Fn_Jour(r.cap.ts));
+  const v = Fn_VersementsProbables(Var_Etat.captures, Fn_MouvementsDegiro(), Var_Etat.corrections).filter(x => x.au === Fn_Jour(r.cap.ts));
   Fn_NoteReception(a.length || v.length ? 'warn' : 'ok', '<b>Capture du ' + Fn_Esc(Fmt_DateHeure(r.cap.ts)) + ' intégrée</b> — ' + r.cap.controle.lues + ' position(s)'
     + (a.length ? '. À vérifier : ' + Fn_Esc(a.join(' ; ')) + '.' : ', somme des lignes = valeur des titres de l’écran.')
     + v.map(x => '<br>' + Fn_HtmlVersement(x)).join(''));
@@ -1285,7 +1451,8 @@ function Fn_Calculs() {
   const plLat = c.positions.reduce((s, p) => s + (p.plLat || 0), 0);
   const investi = titres - plLat;
   const jour = Fn_Jour(c.ts);
-  const mv = Fn_Mouvements();
+  const incomplet = Fn_HistoireIncomplete();   // vue avec Bourso, relevés Bourso pas encore importés : pas de XIRR faux
+  const mv = incomplet ? [] : Fn_Mouvements();
   const { flux, horsEuro } = Fn_Flux(mv, Var_Etat.corrections, jour);
   const releve = mv.length > 0;
   const verse = releve ? flux.reduce((s, f) => s + f.montant, 0) : null;
@@ -1298,7 +1465,7 @@ function Fn_Calculs() {
   // Coûts : frais du courtier ET taxes sur les transactions (TTF française, stamp duty britannique).
   const tFrais = ['frais_courtage', 'frais_connexion', 'frais_change', 'taxe', 'frais'], tDiv = ['dividende', 'impot'];
   const frais = bilan ? somme(tFrais) : null, dividendes = bilan ? somme(tDiv) : null;
-  return { c, titres, vl, cash: m.cash, plLat, plPct: investi > 0 ? plLat / investi * 100 : null, releve, verse,
+  return { c, titres, vl, cash: m.cash, plLat, plPct: investi > 0 ? plLat / investi * 100 : null, releve, incomplet, verse,
     gain: verse != null && vl != null ? vl - verse : null, xirr, premier, horsEuro, frais, dividendes,
     fraisApprox: !!bilan && approx(tFrais), divApprox: !!bilan && approx(tDiv),
     dureeJours: premier ? (c.ts - new Date(premier + 'T12:00:00').getTime()) / 86400000 : null };
@@ -1309,14 +1476,17 @@ function Fn_RendreSynthese(k) {
     $('v-synthese').innerHTML = '<div class="note note-warn">Aucune capture pour l’instant. Lancez la macro depuis le widget du téléphone : cette page s’ouvrira et recevra la capture.</div>';
     return;
   }
-  $('entete').textContent = 'Capture du ' + Fmt_DateHeure(k.c.ts) + ' · ' + k.c.positions.length + ' positions' + (k.c.compte === 'basic' ? ' · compte sans crédit' : '');
+  const v = Fn_Compte(), cb = Fn_DerniereBourso(), cd = Fn_DerniereDegiro();
+  $('entete').textContent = v === 'DB' ? 'DEGIRO : capture du ' + Fmt_DateHeure(cd.ts) + ' · Bourso : capture du ' + Fmt_DateHeure(cb.ts) + ' · ' + k.c.positions.length + ' positions'
+    : (v === 'B' ? 'Bourso : capture du ' : 'Capture du ') + Fmt_DateHeure(k.c.ts) + ' · ' + k.c.positions.length + ' positions' + (k.c.compte === 'basic' ? ' · compte sans crédit' : '');
   const tuile = (lib, val, det, cls) => '<div class="tuile"><div class="lib">' + lib + '</div><div class="val ' + (cls || '') + '">' + val + '</div>'
     + (det ? '<div class="det">' + det + '</div>' : '') + '</div>';
-  const sansReleve = 'importer le relevé de compte';
+  const sansReleve = k.incomplet ? 'importer les relevés Bourso (onglet Relevé)' : 'importer le relevé de compte';
   let detX = sansReleve;
   if (k.releve) detX = (k.xirr == null ? 'pas assez de mouvements' : 'en euros, depuis le ' + Fmt_Jour(k.premier) + (k.dureeJours < 365 ? ' — moins d’un an : taux annualisé, peu significatif' : ''))
     + (k.horsEuro.length ? ' · ⚠ ' + k.horsEuro.length + ' versement(s) ou retrait(s) en devise non compté(s) : taux faussé' : '');
-  $('v-synthese').innerHTML = '<div class="carte"><div class="heros-lib">Valeur nette du compte</div><div class="heros">' + Fmt_Eur(k.vl) + '</div>'
+  $('v-synthese').innerHTML = '<div class="carte"><div class="heros-lib">' + (v === 'DB' ? 'Valeur nette des deux comptes' : v === 'B' ? 'Valeur nette du compte Bourso' : 'Valeur nette du compte')
+    + '</div><div class="heros">' + Fmt_Eur(k.vl) + '</div>'
     + '<div class="tuiles">'
     + tuile('Valeur des titres', Fmt_Eur(k.titres), k.c.positions.length + ' lignes')
     + tuile('Liquidités', Fmt_Eur(k.cash))
@@ -1411,10 +1581,11 @@ function Fn_PasRond(etendue) {
 let Var_Memo = {};
 function Fn_LignesMemo() {
   const mv = Fn_Mouvements(), cle = mv.length + '|' + (mv.length ? mv[mv.length - 1].cle : '') + '|' + JSON.stringify(Var_Etat.corrections || {});
-  if (Var_Memo.lignesCle !== cle) { Var_Memo.lignesCle = cle; Var_Memo.lignes = mv.length ? Fn_Lignes(mv, Var_Etat.corrections, Fn_Liens()) : {}; Var_Memo.histCle = null; }
+  if (Var_Memo.lignesCle !== cle) { Var_Memo.lignesCle = cle; Var_Memo.lignes = mv.length ? Fn_Lignes(mv, Var_Etat.corrections, Fn_Liens(), true) : {}; Var_Memo.histCle = null; }
   return Var_Memo.lignes;
 }
 function Fn_Historique() {
+  if (Fn_HistoireIncomplete()) return null;
   const mv = Fn_Mouvements(), nb = Object.keys(Var_Cours.series || {}).length;
   if (!mv.length || !nb) return null;
   Fn_LignesMemo();
@@ -1498,6 +1669,11 @@ function Fn_GrapheEvolution(k) {
   if (hist && hist.jours.length > 20) { Fn_GrapheEvolutionHisto(hist); Fn_GrapheGainPct(hist); Fn_GraphePerformance(hist); return; }
   Fn_GrapheGainPct(null); Fn_GraphePerformance(null);
   const zone = $('g-evolution'); zone.innerHTML = '';
+  if (Fn_HistoireIncomplete()) {   // les captures DEGIRO seules ne diraient rien de la vue choisie
+    $('evolution-sous').innerHTML = '<div class="note note-warn">L’évolution ' + (Fn_Compte() === 'B' ? 'du compte Bourso' : 'des deux comptes')
+      + ' demande l’historique Bourso : importe tes relevés de compte Bourso (onglet Relevé). En attendant, choisis « DEGIRO » en haut de la page.</div>';
+    $('evolution-legende').innerHTML = ''; $('t-evolution').innerHTML = ''; return;
+  }
   const pts = Var_Etat.captures.filter(c => c.marge && c.marge.vl != null).map(c => ({ t: c.ts, v: c.marge.vl, c }));
   const sous = $('evolution-sous'), leg = $('evolution-legende');
   if (!pts.length) { sous.textContent = 'La courbe se dessinera au fil des captures (il faut le bloc de marge, étape 2 de la macro).'; leg.innerHTML = ''; $('t-evolution').innerHTML = ''; return; }
@@ -1573,7 +1749,7 @@ function Fn_RendreTableau(c) {
   const alertes = Fn_Alertes(c);
   // Quatre colonnes pour tenir sur un téléphone ; quantité, cours et PRU passent sous le nom.
   $('t-positions').innerHTML = '<table><thead><tr><th>Titre</th><th>Valeur</th><th>Poids</th><th>+/− latente</th></tr></thead><tbody>'
-    + rows.map(p => '<tr data-isin="' + Fn_Esc(p.isin) + '" style="cursor:pointer"><td>' + Fn_Esc(p.nom) + Fn_HtmlAnciensNoms(p) + '<div class="muet">' + Fn_Esc(p.ticker) + ' · ' + Fmt_Nb(p.qte, 0) + ' × ' + Fmt_Nb(p.cours, 3) + ' ' + Fn_Esc(p.dev)
+    + rows.map(p => '<tr data-isin="' + Fn_Esc(p.isin) + '" style="cursor:pointer"><td>' + Fn_Esc(p.nom) + Fn_HtmlAnciensNoms(p) + '<div class="muet">' + (p.ticker ? Fn_Esc(p.ticker) + ' · ' : '') + Fmt_Nb(p.qte, 0) + ' × ' + Fmt_Nb(p.cours, 3) + ' ' + Fn_Esc(p.dev)
       + ' · PRU ' + Fmt_Nb(p.pru, 3) + '</div></td><td>' + Fmt_Eur(p.valeur) + '</td><td>' + Fmt_Pct(p.valeur / total * 100, 1)
       + '</td><td class="' + Cls_Signe(p.plLat) + '">' + Fmt_Signe(p.plLat) + '<div class="muet">' + Fmt_Pct(p.plPct, 1, true) + '</div></td></tr>').join('')
     + '</tbody></table>'
@@ -1598,7 +1774,7 @@ function Fn_HtmlAnciensNoms(p) {
 
 /* ---------- relevé ---------- */
 function Fn_RendreReleve() {
-  const mv = Fn_Mouvements();
+  const mv = Fn_MouvementsDegiro();   // l'onglet Relevé montre le relevé DEGIRO, quel que soit le compte affiché
   if (!mv.length) { $('releve-etat').innerHTML = '<div class="note note-warn">Aucun relevé importé : XIRR, versements, dividendes et frais restent vides.</div>'; return; }
   const b = Fn_Bilan(mv, Var_Etat.corrections, Fn_Taux(mv, Var_Etat.corrections));
   const { horsEuro } = Fn_Flux(mv, Var_Etat.corrections);
@@ -1641,44 +1817,30 @@ function Fn_Rendre() {
   Fn_RendreSynthese(k);
   if (c) { Fn_RendreIndicateurs(k); Fn_GrapheEvolution(k); Fn_GrapheRepartition(c); Fn_GraphePlusValues(c); Fn_RendreEcarts(c); Fn_RendreTableau(c); }
   else $('c-ecarts').classList.add('cache');
-  Fn_RendreBourso();
+  Fn_RendreCompte();
   Fn_RendreCours();
   if (c) Fn_RendreAnalyse();
   Fn_RendreRevenus();
   Fn_RendreReleve();
+  Fn_RendreReleveBourso();
   const n = Var_Etat.captures.length;
   $('captures-etat').textContent = n ? n + ' capture(s) enregistrée(s), du ' + Fmt_Date(Var_Etat.captures[0].ts) + ' au ' + Fmt_Date(Var_Etat.captures[n - 1].ts) + '.' : 'Aucune capture enregistrée.';
 }
-/* COMPTE BOURSO (dernière capture de la macro « Smart - Bourso ») : lignes, totaux, contrôle, mouvements lus. */
-function Fn_RendreBourso() {
-  const c = Fn_DerniereBourso(), carte = $('c-bourso');
-  carte.classList.toggle('cache', !c);
-  if (!c) return;
-  const k = c.controle, complet = Fn_BoursoComplete(c);
-  $('bourso-sous').innerHTML = 'Capture du ' + Fn_Esc(Fmt_DateHeure(c.ts)) + ' · ' + c.positions.length + ' ligne(s) · '
-    + (complet ? 'somme des lignes = évaluation des titres ✓'
-      : '<b>il manque sans doute une ligne</b> (somme ' + Fn_Esc(Fmt_Eur(k.somme, 2)) + ' pour ' + Fn_Esc(Fmt_Eur(k.ecran, 2)) + ' à l’écran) : relance la capture et fais glisser jusqu’à la dernière ligne pendant les 5 secondes de lecture');
-  const tuile = (lib, val, cls) => '<div class="tuile"><div class="lib">' + lib + '</div><div class="val ' + (cls || '') + '" style="font-size:16px">' + val + '</div></div>';
-  const total = c.titres != null && c.especes != null ? c.titres + c.especes : null;
-  $('bourso-tuiles').innerHTML = tuile('Valeur des titres', Fmt_Eur(c.titres)) + tuile('Espèces', Fmt_Eur(c.especes, 2))
-    + tuile('Total', Fmt_Eur(total)) + tuile('Plus-value latente', c.plLat == null ? '—' : Fmt_Signe(c.plLat), Cls_Signe(c.plLat));
-  const lignes = c.positions.slice().sort((a, b) => (b.valeur || 0) - (a.valeur || 0));
-  $('t-bourso').innerHTML = '<table><thead><tr><th>Ligne</th><th>Valeur</th><th>PRU</th><th>Plus-value latente</th></tr></thead><tbody>'
-    + lignes.map(p => { const cout = p.qte * p.pru, pct = cout > 0 && p.plLat != null ? p.plLat / cout * 100 : null;
-      return '<tr><td>' + Fn_Esc(p.nom) + '<div class="muet">' + Fmt_Nb(p.qte, 0) + ' × ' + Fmt_Nb(p.cours, 2) + ' €'
-        + (p.varJour != null ? ' · <span class="' + Cls_Signe(p.varJour) + '">' + Fmt_Pct(p.varJour, 2, true) + '</span> sur le jour' : '') + '</div></td>'
-        + '<td>' + Fmt_Eur(p.valeur) + '</td><td>' + Fmt_Nb(p.pru, 2) + ' €</td>'
-        + '<td class="' + Cls_Signe(p.plLat) + '">' + (p.plLat == null ? '—' : Fmt_Signe(p.plLat) + (pct != null ? '<div class="muet">' + Fmt_Pct(pct, 1, true) + '</div>' : '')) + '</td></tr>'; }).join('')
-    + '</tbody></table>';
-  const mv = (Var_Etat.bourso.mouvements || []).slice().reverse();
-  const libType = { achat: '▲ achat', vente: '▼ vente', dividende: 'dividende', versement: 'versement', retrait: 'retrait', frais: 'frais', autre: '' };
-  $('bourso-mv').innerHTML = mv.length ? '<details><summary>' + mv.length + ' mouvement(s) lu(s) dans l’appli, du ' + Fmt_Jour(mv[mv.length - 1].date) + ' au ' + Fmt_Jour(mv[0].date)
-    + '</summary><div class="defile"><table><thead><tr><th>Date</th><th>Opération</th><th>Qté</th><th>Montant</th></tr></thead><tbody>'
-    + mv.map(m => '<tr><td>' + Fmt_Jour(m.date) + '</td><td>' + Fn_Esc(m.nom || m.libelle) + '<div class="muet">' + Fn_Esc(libType[m.type] || m.libelle)
-      + (m.cours != null ? ' à ' + Fmt_Nb(m.cours, 2) + ' €' : '') + '</div></td><td>' + (m.qte != null ? Fmt_Nb(m.qte, 0) : '') + '</td>'
-      + '<td class="' + Cls_Signe(m.montant) + '">' + (m.montant != null ? (m.montant > 0 ? '+' : '') + Fmt_Eur(m.montant, 2) : '—') + '</td></tr>').join('')
-    + '</tbody></table></div></details>' : '<div class="muet" style="margin-top:6px">Aucun mouvement lu pour l’instant : la macro ne demande l’écran Mouvements '
-    + 'que quand le solde espèces change.</div>';
+/* CHOIX DU COMPTE, en haut de la page (dès qu'une capture Bourso existe) : DEGIRO · Bourso · Les deux. Il vaut pour tous
+   les onglets ; il est gardé. Tant que l'historique Bourso manque, une ligne dit ce qui ne compte encore que DEGIRO. */
+function Fn_RendreCompte() {
+  const zone = $('b-compte'), note = $('compte-note'), avecB = !!Fn_DerniereBourso();
+  zone.classList.toggle('cache', !avecB);
+  if (!avecB) { note.innerHTML = ''; return; }
+  const v = Fn_Compte();
+  zone.innerHTML = [['D', 'DEGIRO'], ['B', 'Bourso'], ['DB', 'Les deux']].map(([k, l]) => '<button type="button" data-compte="' + k + '" aria-pressed="' + (v === k) + '">' + l + '</button>').join('');
+  zone.querySelectorAll('[data-compte]').forEach(b => { b.onclick = () => {
+    Var_Etat.reglages = Var_Etat.reglages || {}; Var_Etat.reglages.compte = b.dataset.compte; Fn_Sauver(); Var_Memo.histCle = null; Fn_Rendre(); }; });
+  const isins = (Var_Etat.bourso || {}).isins || {}, cb = Fn_DerniereBourso(), sansIsin = cb.positions.filter(p => !isins[p.nom]).length;
+  note.innerHTML = (Fn_HistoireIncomplete() ? '<div class="note note-warn">Vue « ' + (v === 'B' ? 'Bourso' : 'Les deux') + ' » : les lignes Bourso comptent dans les totaux et '
+      + 'les positions ; l’historique (Évolution, XIRR, PRU au fil du temps, Revenus) attend tes relevés de compte Bourso (onglet Relevé)'
+      + (v === 'DB' ? ' ; en attendant, PRU et Revenus ne montrent que DEGIRO' : '') + '.</div>' : '')
+    + (v !== 'D' && sansIsin ? '<div class="note note-warn">' + sansIsin + ' ligne(s) Bourso sans ISIN : pas encore de cours ni de détail. Importe ton relevé titres Bourso (PDF, onglet Relevé).</div>' : '');
 }
 function Fn_Theme() {
   const t = Var_Etat.theme || 'auto';
@@ -1723,12 +1885,13 @@ $('f-captures').onchange = async e => {
 function Fn_ImporterReleve(texte, nom) {
   const r = Fn_LireReleve(texte);
   if (r.erreur) return { ok: false, texte: '<b>' + Fn_Esc(nom) + '</b> : ' + Fn_Esc(r.erreur) };
-  const fu = Fn_Fusionner(Fn_Mouvements(), r.mouvements);
+  const fu = Fn_Fusionner(Fn_MouvementsDegiro(), r.mouvements);
   Var_Etat.releve = { mouvements: fu.tous, imports: ((Var_Etat.releve && Var_Etat.releve.imports) || []).concat([{ fichier: nom, ts: Date.now(), lus: r.mouvements.length, ajoutes: fu.ajoutes }]) };
   return { ok: true, texte: '<b>' + Fn_Esc(nom) + '</b> : ' + r.mouvements.length + ' mouvement(s) lu(s), ' + fu.ajoutes + ' nouveau(x)'
     + (r.informatives ? ', ' + r.informatives + ' ligne(s) d’information sans montant (virements internes flatex…)' : '')
     + (r.rejets ? ', ' + r.rejets + ' ligne(s) illisible(s) ignorée(s)' : '') };
 }
+$('f-releve-bourso').onchange = async e => { const f = [...e.target.files]; e.target.value = ''; if (f.length) await Fn_ImporterPdfBourso(f); };
 $('f-releve').onchange = async e => {
   const bilans = [];
   for (const f of e.target.files) bilans.push(Fn_ImporterReleve(await lireFichier(f), f.name));
@@ -1795,8 +1958,11 @@ const Cst_SymboleDev = { EUR: '€', USD: '$', GBP: '£' };   // code → symbol
 
 // Titres pour le robot : ceux détenus (dernière capture) et ceux d'avant (achats et ventes du relevé), avec la date du premier achat.
 function Fn_ListeSymboles() {
-  const c = Fn_Derniere(), titres = {}, remplaces = new Set(Fn_Liens().map(l => l.de));
-  Fn_Mouvements().forEach(m => {
+  // Tous les comptes, quel que soit celui qui est affiché : le robot doit avoir les cours de chaque titre.
+  const mvTous = Fn_MouvementsDegiro().concat(Fn_MouvementsBourso()), titres = {}, remplaces = new Set(Fn_LiensIsin(mvTous).map(l => l.de));
+  const d = Fn_DerniereDegiro(), cb = Fn_DerniereBourso();
+  const detenus = (d ? d.positions : []).concat(cb ? Fn_PositionsBourso(cb) : []).filter(p => /^[A-Z]{2}[A-Z0-9]{9}\d$/.test(p.isin || ''));
+  mvTous.forEach(m => {
     // Un ancien ISIN (temporaire, ou remplacé par un changement d'ISIN) n'est plus coté : rien à demander au robot.
     if (!/^[A-Z]{2}[A-Z0-9]{9}\d$/.test(m.isin || '') || remplaces.has(m.isin)) return;
     const t = Fn_Classer(m, Var_Etat.corrections);
@@ -1805,13 +1971,13 @@ function Fn_ListeSymboles() {
     const x = titres[m.isin] = titres[m.isin] || { isin: m.isin, ticker: '', dev, nom: m.produit || '', detenu: false, depuis: m.date };
     if (m.date < x.depuis) x.depuis = m.date;
   });
-  (c ? c.positions : []).forEach(p => { titres[p.isin] = Object.assign(titres[p.isin] || {}, { isin: p.isin, ticker: p.ticker, dev: p.dev, nom: p.nom, detenu: true }); });
+  detenus.forEach(p => { titres[p.isin] = Object.assign(titres[p.isin] || {}, { isin: p.isin, ticker: p.ticker, dev: p.dev, nom: p.nom, detenu: true }); });
   return { titres: Object.values(titres).sort((a, b) => a.isin < b.isin ? -1 : 1), corrections: Var_Etat.corrSymboles || {} };
 }
 // Envoie la liste au dépôt si elle a changé : le robot se relance alors de lui-même.
 async function Fn_SyncSymboles() {
   // Sans capture, on ne sait pas quels titres sont détenus : rien n'est envoyé (tous passeraient pour vendus).
-  if (!Fn_Derniere()) return false;
+  if (!Fn_DerniereDegiro() && !Fn_DerniereBourso()) return false;
   const voulu = Fn_ListeSymboles();
   if (!voulu.titres.length) return false;
   const r = await Fn_Gh('contents/symboles.json');
@@ -1882,7 +2048,8 @@ const Fn_Fx = () => { const fx = {}; Object.keys(Var_Cours.series).forEach(id =>
 /* ---------- indicateurs ---------- */
 function Fn_ContexteIndicateurs(k) {
   const c = Fn_Derniere(); if (!c || !k) return null;
-  const mv = Fn_Mouvements(), taux = Fn_Taux(mv, Var_Etat.corrections), fx = Fn_Fx();
+  // Vue avec Bourso sans son historique : pas de relevé pour les indicateurs (dividendes, frais… de DEGIRO seul, rapportés aux deux comptes, seraient faux).
+  const mv = Fn_HistoireIncomplete() ? [] : Fn_Mouvements(), taux = Fn_Taux(mv, Var_Etat.corrections), fx = Fn_Fx();
   const ctx = { positions: c.positions, marge: c.marge, k,
     releve: mv.length ? { mouvements: mv, classer: m => Fn_Classer(m, Var_Etat.corrections), enEuros: m => Fn_EnEuros(m, taux) } : null,
     cours: { serie: Fn_Serie, fx: (dev, jour) => Fn_TauxAu(fx, dev, jour) } };
@@ -2449,6 +2616,8 @@ function Fn_RendreStatsCours(pts, pos, ops, ligne) {
     + (pos && pos.pru ? tuile('Écart au PRU', Fmt_Pct((dernier / pos.pru - 1) * 100, 1, true), Cls_Signe(dernier - pos.pru)) : '')
     + (vol != null ? tuile('Volatilité annualisée', Fmt_Pct(vol * 100, 1)) : '')
     + '</div><div class="muet" style="margin-top:6px">' + (pos && pos.pru && (pos.pru < bas * 0.7 || pos.pru > haut * 1.3) ? 'PRU ' + Fmt_Nb(pos.pru, 3) + ', hors du graphique · ' : '')
+    + (pos && pos.pruDegiro != null && Math.abs(pos.pruDegiro - pos.pru) > 1e-6 ? 'PRU frais d’achat compris ' + Fmt_Nb(pos.pru, 3) + ' (DEGIRO affiche ' + Fmt_Nb(pos.pruDegiro, 3) + ', sans les frais) · ' : '')
+    + (pos && pos.courtier === 'B' ? 'PRU de Bourso, frais compris · ' : '')
     + 'ISIN ' + Fn_Esc(isin) + (corr ? ' · Yahoo ' + Fn_Esc(corr) : '')
     + (anciens.length ? ' · anciens noms : ' + anciens.map(a => Fn_Esc(a.nom) + (a.du || a.au ? ' (' + (a.du ? Fmt_Jour(a.du) : '…') + ' → ' + (a.au ? Fmt_Jour(a.au) : '…') + ')' : '') + ' <span title="source">· ' + Fn_Esc(a.source) + '</span>').join(', ') : '') + '</div>'
     + Fn_HtmlDivisions(isin, ligne)
@@ -2601,7 +2770,9 @@ function Fn_DemandeApp(k, sansTete) {
   const d = Fn_DonneesAnalyse(k);
   return [
     'Tu es analyste financier indépendant. Fais une revue COMPLÈTE de mon portefeuille d’actions, fondée sur les fondamentaux des sociétés et sur l’actualité. '
-      + 'Mes chiffres, tirés de mon compte le ' + d.date + ', sont en JSON à la fin de ce message. Mon compte : compte-titres DEGIRO sans crédit '
+      + 'Mes chiffres, tirés de ' + (Fn_Compte() === 'DB' ? 'mes deux comptes' : 'mon compte') + ' le ' + d.date + ', sont en JSON à la fin de ce message. '
+      + (Fn_Compte() === 'DB' ? 'Mes comptes : un compte-titres DEGIRO et un compte-titres BoursoBank (chaque ligne finit par D ou B, « D+B » si chez les deux), tous deux sans crédit '
+        : Fn_Compte() === 'B' ? 'Mon compte : compte-titres BoursoBank sans crédit ' : 'Mon compte : compte-titres DEGIRO sans crédit ')
       + '(ni marge, ni levier, ni vente à découvert) ; je suis un particulier, fiscalité française.',
     '1. PAS D’ANALYSE TECHNIQUE : ni graphique, ni support ou résistance, ni moyenne mobile, ni RSI, MACD, figure chartiste ou « momentum ». '
       + 'Les variations de cours du JSON servent seulement à poser la question « pourquoi ? » ; réponds-y par des faits.',
@@ -2647,7 +2818,7 @@ function Fn_DemandeApp(k, sansTete) {
       + 'sépare les faits, l’avis des analystes et ton propre avis ; si une information manque ou si les sources se contredisent, dis-le, n’invente rien ; '
       + 'français simple, termes techniques expliqués en quelques mots (PER, VE/EBITDA…) ; la décision m’appartient : tes avis ne sont ni des ordres '
       + 'ni un conseil personnalisé.',
-    'LES DONNÉES : montants en euros, change compris au taux réel de chaque transaction. « cours » et « pru » (prix de revient unitaire, frais exclus) '
+    'LES DONNÉES : montants en euros, change compris au taux réel de chaque transaction. « cours » et « pru » (prix de revient unitaire, frais d’achat compris) '
       + 'dans la devise de cotation (GBX = pence). « poids_pct » : part de la valeur des titres. « plus_value_pct » : en euros, change compris. '
       + '« perf_cours_… » : variation du cours, en devise. « gain_total_ligne_eur » : plus-value latente + résultat des ventes + dividendes − frais. '
       + '« operations » : achats et ventes datés. « lignes_vendues » : titres détenus autrefois et leur résultat en euros. '
