@@ -43,6 +43,7 @@ h1 { font-size: 20px; margin: 4px 0 2px; }
 h2 { font-size: 16px; margin: 0 0 4px; }
 .sous { color: var(--encre-2); font-size: 13px; }
 .muet { color: var(--muet); font-size: 12.5px; }
+.calcul { margin: 8px 0 4px; padding-left: 18px; } .calcul li { margin: 2px 0; }
 .carte { background: var(--surface); border: 1px solid var(--bord); border-radius: 12px; padding: 14px; margin: 12px 0; }
 .heros-lib { color: var(--encre-2); font-size: 13px; }
 .heros { font-size: 48px; font-weight: 600; line-height: 1.1; margin: 2px 0 10px; }
@@ -159,10 +160,22 @@ table.gauche-1 th:first-child, table.gauche-1 td:first-child { text-align: left;
     <div class="muet" id="evolution-sous"></div>
     <div class="legende" id="evolution-legende"></div>
     <div class="graphe" id="g-evolution"></div>
+    <ul class="muet calcul">
+      <li><b>Valeur nette</b> = titres + espèces, chaque jour ouvré à la clôture.</li>
+      <li><b>Titres</b> : quantités de votre relevé × cours de clôture Yahoo (au niveau d’époque avant une division ou des actions gratuites), convertis en euros au taux BCE du jour.</li>
+      <li><b>Espèces</b> : tous les mouvements de votre relevé. Elles sont donc déjà <b>nettes</b> des frais de courtage, frais de change, frais de connexion et taxe sur les transactions (TTF), et les dividendes y entrent <b>nets</b> de l’impôt retenu à la source.</li>
+      <li><b>Versements nets</b> = versements − retraits, en euros.</li>
+      <li>Pas déduit : l’impôt français que vous payez plus tard à la déclaration (plus-values, dividendes, prélèvements sociaux).</li>
+    </ul>
     <div id="bloc-gainpct" class="cache">
       <h2 style="margin-top:12px">Gain sur l’argent versé</h2>
       <div class="muet" id="gainpct-sous"></div>
       <div class="graphe" id="g-gainpct"></div>
+      <ul class="muet calcul">
+        <li><b>Gain</b> = valeur nette − versements nets ; en % : divisé par les versements nets.</li>
+        <li>Il comprend les plus-values latentes et réalisées et les dividendes nets, <b>moins</b> tous les frais et taxes payés (même base que ci-dessus).</li>
+        <li>Un versement fait baisser ce % sans qu’il y ait de perte : l’argent neuf n’a encore rien gagné. La carte Performance, elle, n’en dépend pas.</li>
+      </ul>
     </div>
     <details><summary>Valeurs</summary><div class="defile" id="t-evolution"></div></details>
   </section>
@@ -174,6 +187,12 @@ table.gauche-1 th:first-child, table.gauche-1 td:first-child { text-align: left;
     <div class="tuiles" id="perf-tuiles"></div>
     <div class="graphe" id="g-perf" style="margin-top:8px"></div>
     <div class="muet" id="perf-sous"></div>
+    <ul class="muet calcul">
+      <li><b>En %</b> : rendement pondéré dans le temps (« TWR », la méthode de Bourso). Chaque jour : (valeur nette − versements du jour) ÷ valeur nette de la veille, et ces variations s’enchaînent depuis le début de la période. Un versement ou un retrait ne fait ni monter ni baisser la courbe : elle mesure vos choix d’actions, pas vos apports.</li>
+      <li><b>En €</b> : gain de la période = valeur nette du jour − valeur nette au début − versements nets depuis.</li>
+      <li><b>XIRR</b> : le taux annuel qui, appliqué à chaque euro le temps où il est resté sur le compte, redonne la valeur d’aujourd’hui (la valeur du début comptée comme un premier versement). Affiché sur un an ou plus.</li>
+      <li>Même base que la valeur nette : après frais de courtage, de change et de connexion, taxe sur les transactions et impôt retenu sur les dividendes ; avant l’impôt français de la déclaration.</li>
+    </ul>
   </section>
 
   <section class="carte" id="c-repartition" data-onglet="accueil">
@@ -1303,7 +1322,7 @@ function Fn_GrapheEvolutionHisto(hist) {
   marches.push({ t: tMax, v: cumul });
   const verseAu = t => { let v = 0; for (const m of marches) { if (m.t > t) break; v = m.v; } return v; };
   const nbEst = pts.filter(p => p.est).length;
-  sous.textContent = 'Valeur du compte reconstituée chaque jour ouvré depuis le ' + Fmt_Jour(pts[0].j) + ' : quantités et liquidités du relevé × cours de clôture (change BCE). '
+  sous.textContent = 'Valeur du compte reconstituée chaque jour ouvré depuis le ' + Fmt_Jour(pts[0].j) + '. '
     + (caps.length ? 'Points : vos captures. ' : '')
     + (nbEst ? 'En pointillés : jours où plus de 5 % de la valeur est estimée (titres sans cours, comptés au prix de leur dernière opération) — les cours manquants arrivent au fil des soirées.' : '');
   leg.innerHTML = '<span><i style="background:var(--serie-1)"></i>Valeur nette</span><span><i style="background:var(--serie-2)"></i>Versements nets cumulés</span>'
@@ -2211,9 +2230,8 @@ function Fn_GrapheGainPct(hist) {
       + '<br>Valeur ' + Fmt_Eur(hist.valeurs[i]) + ' · versé ' + Fmt_Eur(verses[i])) });
   bloc.classList.toggle('cache', !ok);
   if (!ok) return;
-  $('gainpct-sous').textContent = 'Gain du compte en % de l’argent versé, chaque jour, change compris. Aujourd’hui ' + Fmt_Pct(vals[n], 1, true)
-    + (vals[pic] != null && pic !== n ? ' ; plus haut sur 12 mois ' + Fmt_Pct(vals[pic], 1, true) + ' le ' + Fmt_Jour(hist.jours[pic]) : '')
-    + '. Un versement fait baisser ce % sans perte (l’argent neuf n’a encore rien gagné) ; le XIRR, lui, en tient compte.';
+  $('gainpct-sous').textContent = 'Aujourd’hui ' + Fmt_Pct(vals[n], 1, true)
+    + (vals[pic] != null && pic !== n ? ' ; plus haut sur 12 mois ' + Fmt_Pct(vals[pic], 1, true) + ' le ' + Fmt_Jour(hist.jours[pic]) : '') + '.';
 }
 /* PERFORMANCE (comme Bourso) : période au choix, en % (TWR) ou en € (gain), avec le XIRR de la période. */
 const Cst_PerfPeriodes = [['1M', '1 mois', 1], ['6M', '6 mois', 6], ['1A', '1 an', 12], ['5A', '5 ans', 60], ['tout', 'Tout', null]];
@@ -2252,9 +2270,7 @@ function Fn_GraphePerformance(hist) {
   Fn_CourbePct(zone, vals, { H: 200, axes: true, id: 'perf', etiquettes: etiq, milieu: true, fmt: enEur ? fmtEur : null,
     titre: 'Performance du compte depuis le ' + Fmt_Jour(jours[0]) + (enEur ? ', gain en euros' : ', en pourcentage'),
     bulle: i => '<b>' + Fmt_Jour(jours[i]) + '</b><br>Performance ' + Fmt_Pct(p.pct[i], 1, true) + '<br>Gain ' + Fmt_Signe(p.eur[i]) + '<br>Valeur ' + Fmt_Eur(hist.valeurs[p.i0 + i]) });
-  $('perf-sous').textContent = 'Depuis le ' + Fmt_Jour(jours[0]) + '. En % : rendement pondéré dans le temps (méthode « TWR », celle de Bourso) — un versement ou un retrait '
-    + 'ne fait ni monter ni baisser la courbe. En € : gain depuis le début de la période (valeur − valeur du début − versements nets). '
-    + 'XIRR : rendement annuel de votre argent, versements compris à leur date. Valeurs reconstituées chaque jour ouvré à la clôture.';
+  $('perf-sous').textContent = 'Depuis le ' + Fmt_Jour(jours[0]) + '.';
 }
 // Sous le cours d'une ligne : les distributions et divisions prises en compte, et celles que le relevé ne confirme pas.
 function Fn_HtmlDivisions(isin, ligne) {
