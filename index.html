@@ -2059,37 +2059,63 @@ function Fn_Rendre() {
 /* AVERTISSEMENTS (onglet ⚠) : tout ce qui est technique ou demande une action, rassemblé au lieu d'être dispersé dans les
    cartes. niveau « crit » ou « warn » : compté sur la pastille de l'onglet ; « info » : affiché seulement. */
 function Fn_Avertissements() {
-  const out = [], ajout = (niveau, rubrique, html, onglet) => out.push({ niveau, rubrique, html, onglet });
+  // Chaque avertissement : un titre, ce qu'il veut dire (sens) et que faire (faire) — en mots simples.
+  const out = [], ajout = (niveau, rubrique, titre, sens, faire, onglet) => out.push({ niveau, rubrique, titre, sens, faire, onglet });
   // Cours : le robot (GitHub) et le téléphone (macro « Smart - cours »).
   const idx = Var_Cours.index, jeton = !!Lire_Local(Cst_CleJeton);
-  if (!jeton) ajout('warn', 'Cours', 'Pas de clé d’accès GitHub : pas de cours. Colle-la une fois dans Réglages, rubrique Cours.', 'reglages');
-  if (Var_Cours.erreur) ajout('crit', 'Cours', 'Mise à jour des cours impossible : ' + Fn_Esc(Var_Cours.erreur), 'reglages');
+  if (!jeton) ajout('warn', 'Cours', 'Pas d’accès aux cours',
+    'Les cours des actions sont rangés par un robot sur GitHub ; Smart a besoin d’une clé d’accès pour les lire. Sans elle : pas de graphique de cours, pas de courbe d’évolution.',
+    'Colle la clé une fois dans Réglages, rubrique Cours.', 'reglages');
+  if (Var_Cours.erreur) ajout('crit', 'Cours', 'Cours non téléchargés',
+    'Smart n’a pas pu récupérer les cours (' + Fn_Esc(Var_Cours.erreur) + '), souvent une coupure de réseau. Les derniers cours connus restent affichés.',
+    'Recharge la page plus tard. Si le message reste plusieurs jours, dis-le.', null);
   if (idx) {
     const tel = idx.telephone;
-    ajout('info', 'Cours', 'Cours du ' + Fn_Esc(Fmt_DateHeure(Date.parse(idx.maj))) + ' (robot) · ' + (idx.series || []).length + ' actions avec leurs cours'
-      + (tel ? ' · dernier passage du téléphone (macro « Smart - cours ») : ' + tel.ok + ' cours reçu(s)' + (tel.recu ? ' le ' + Fn_Esc(Fmt_DateHeure(Date.parse(tel.recu))) : '') : '') + '.', null);
+    ajout('info', 'Cours', 'Dernière mise à jour des cours : ' + Fn_Esc(Fmt_DateHeure(Date.parse(idx.maj))),
+      'Chaque soir de semaine à 22 h 30, ton téléphone (macro « Smart - cours ») demande les cours à Yahoo et les dépose sur GitHub, où le robot les range. '
+      + (idx.series || []).length + ' actions ont aujourd’hui leurs cours.' + (tel ? ' Au dernier passage' + (tel.recu ? ', le ' + Fn_Esc(Fmt_DateHeure(Date.parse(tel.recu))) : '')
+        + ', le téléphone a rapporté ' + tel.ok + ' cours.' : ''),
+      'Rien : c’est une information.', null);
     const lignes = Fn_LignesMemo();
     const vrais = (idx.introuvables || []).filter(x => !(lignes[x.isin] && lignes[x.isin].etats.every(e => !e.qte)));   // aller-retour dans la journée : pas besoin de cours
-    if (vrais.length) ajout('warn', 'Cours', vrais.length + ' action(s) introuvable(s) chez Yahoo : ' + vrais.map(x => Fn_Esc(x.nom || x.isin)).join(', ')
-      + '. Si tu connais leur symbole Yahoo, impose-le dans Réglages → Cours.', 'reglages');
-    if (idx.alerte) ajout('info', 'Cours', Fn_Esc(idx.alerte) + ' (le robot essaie chaque soir ; rien à faire)', null);
-    if (tel && (tel.ko || tel.refus)) ajout('warn', 'Cours', 'Dernier passage du téléphone : ' + (tel.ko ? tel.ko + ' échec(s) chez Yahoo' : '') + (tel.ko && tel.refus ? ', ' : '')
-      + (tel.refus ? tel.refus + ' dépôt(s) refusé(s) par GitHub' : '') + '. Le robot redemandera ces cours le soir suivant.', null);
-    if (idx.illisibles) ajout('warn', 'Cours', idx.illisibles + ' réponse(s) de Yahoo illisible(s) : le robot les redemandera.', null);
+    if (vrais.length) ajout('warn', 'Cours', vrais.length + ' action(s) introuvable(s) chez Yahoo : ' + vrais.map(x => Fn_Esc(x.nom || x.isin)).join(', '),
+      'Le robot cherche chaque action chez Yahoo à partir de son ISIN, et n’a trouvé aucun symbole qui lui corresponde (nom ou devise différents) — souvent une société '
+      + 'radiée ou rachetée. Sans cours, la valeur de ces actions dans l’historique est estimée au prix de ta dernière opération.',
+      'Si tu connais leur symbole chez Yahoo (par exemple « ALO.PA »), tape-le dans Réglages → Cours. Sinon, rien : seul l’historique est un peu moins précis.', 'reglages');
+    if (idx.alerte) ajout('info', 'Cours', 'Actions en cours d’identification chez Yahoo',
+      'Le robot a reçu des actions nouvelles pour lui (par exemple tes actions Bourso) et ne connaît pas encore leur symbole Yahoo. Chaque soir, il en essaie un à trois par action, '
+      + 'jusqu’à trouver le bon. En attendant, leurs courbes sont estimées (pointillés). Message du robot : « ' + Fn_Esc(idx.alerte) + ' »',
+      'Rien : il faut juste quelques soirs.', null);
+    if (tel && (tel.ko || tel.refus)) ajout('warn', 'Cours', 'Cours manqués au dernier passage du téléphone',
+      'Ce soir-là, ' + (tel.ko ? tel.ko + ' demande(s) à Yahoo n’ont pas abouti' : '') + (tel.ko && tel.refus ? ' et ' : '') + (tel.refus ? tel.refus + ' dépôt(s) sur GitHub ont été refusés' : '')
+      + ' (réseau coupé, Yahoo qui refuse trop de demandes…).', 'Rien : le robot redemande ces cours le soir suivant.', null);
+    if (idx.illisibles) ajout('warn', 'Cours', 'Réponses de Yahoo illisibles', idx.illisibles + ' réponse(s) de Yahoo n’ont pas pu être lues.', 'Rien : le robot les redemande le soir suivant.', null);
   }
   // Captures.
   const cd = Fn_DerniereDegiro(), cb = Fn_DerniereBourso();
-  if (cd) { const a = Fn_Alertes(cd); if (a.length) ajout('warn', 'Captures', 'Capture DEGIRO du ' + Fn_Esc(Fmt_DateHeure(cd.ts)) + ' : ' + Fn_Esc(a.join(' ; ')) + '.', 'accueil'); }
-  if (cb && !Fn_BoursoComplete(cb)) ajout('warn', 'Captures', 'Capture Bourso du ' + Fn_Esc(Fmt_DateHeure(cb.ts)) + ' incomplète (somme des lignes ≠ évaluation des titres) : '
-    + 'relance-la et fais glisser la liste jusqu’à la dernière ligne pendant les 5 secondes de lecture.', 'accueil');
+  if (cd) { const a = Fn_Alertes(cd); if (a.length) ajout('warn', 'Captures', 'Capture DEGIRO du ' + Fn_Esc(Fmt_DateHeure(cd.ts)) + ' à vérifier',
+    'La capture lue ne tombe pas tout à fait juste : ' + Fn_Esc(a.join(' ; ')) + '. Le plus souvent, l’appli DEGIRO n’avait pas encore rafraîchi toutes ses lignes au moment de la lecture.',
+    'Refais une capture DEGIRO (widget Smart-Portefeuille), de préférence quand l’appli est ouverte depuis quelques secondes.', 'accueil'); }
+  if (cb && !Fn_BoursoComplete(cb)) ajout('warn', 'Captures', 'Capture Bourso du ' + Fn_Esc(Fmt_DateHeure(cb.ts)) + ' incomplète',
+    'La somme des lignes lues ne donne pas l’« Évaluation titres » affichée par Bourso : une ou plusieurs lignes n’ont pas été lues pendant les 5 secondes de lecture.',
+    'Refais une capture Bourso (widget Smart-Bourso) et fais glisser la liste jusqu’à la dernière ligne pendant les 5 secondes.', 'accueil');
   // Bourso : ISIN et historique.
   if (cb) {
     const isins = (Var_Etat.bourso || {}).isins || {}, sans = cb.positions.filter(p => !isins[p.nom]);
-    if (sans.length) ajout('warn', 'Bourso', sans.length + ' ligne(s) sans ISIN (' + sans.map(p => Fn_Esc(p.nom)).join(', ') + ') : pas de cours ni de détail. Importe un relevé titres Bourso récent.', 'releve');
-    if (!Fn_MouvementsBourso().length) ajout('warn', 'Bourso', 'Pas d’historique Bourso : Évolution, XIRR, PRU au fil du temps et Revenus ne comptent que DEGIRO. Importe tes relevés Bourso (PDF).', 'releve');
+    if (sans.length) ajout('warn', 'Bourso', sans.length + ' ligne(s) Bourso sans ISIN : ' + sans.map(p => Fn_Esc(p.nom)).join(', '),
+      'L’appli Bourso n’affiche pas l’ISIN (le code international d’une action) ; Smart le trouve dans tes relevés titres. Sans lui, pas de cours ni de détail pour ces lignes.',
+      'Importe ton dernier relevé titres Bourso (PDF) dans l’onglet Relevé.', 'releve');
+    if (!Fn_MouvementsBourso().length) ajout('warn', 'Bourso', 'Pas encore d’historique Bourso',
+      'Smart connaît tes lignes Bourso d’aujourd’hui (la capture), mais pas leur passé : versements, achats, dividendes. Évolution, XIRR, PRU au fil du temps et Revenus '
+      + 'ne comptent donc que DEGIRO.', 'Importe tes relevés Bourso (PDF) dans l’onglet Relevé.', 'releve');
     const h = Fn_HistoBourso();
-    if (h.ruptures.length) ajout('warn', 'Bourso', 'Relevé espèces Bourso manquant : ' + h.ruptures.map(x => 'entre celui du ' + Fmt_Jour(x.apres) + ' et celui du ' + Fmt_Jour(x.avant)).join(' ; ') + '.', 'releve');
-    if (h.sansIsin.length) ajout('info', 'Bourso', 'Sans ISIN (anciennes lignes, cours absents de l’historique) : ' + h.sansIsin.map(Fn_Esc).join(', ') + '. Tu peux les taper dans l’onglet Relevé.', 'releve');
+    if (h.ruptures.length) ajout('warn', 'Bourso', 'Relevé espèces Bourso manquant',
+      'Le solde de départ d’un relevé n’est pas égal au solde final du précédent : il manque un relevé ' + h.ruptures.map(x => 'entre celui du ' + Fmt_Jour(x.apres) + ' et celui du ' + Fmt_Jour(x.avant)).join(' ; ')
+      + '. Ses opérations manquent à l’historique.', 'Télécharge ce relevé dans l’appli Bourso et importe-le (onglet Relevé).', 'releve');
+    if (h.sansIsin.length) ajout('info', 'Bourso', 'Anciennes actions Bourso sans ISIN : ' + h.sansIsin.map(Fn_Esc).join(', '),
+      'Ces actions ont été achetées puis revendues entre deux relevés titres : aucun document ne donne leur ISIN. Sans lui, le robot ne peut pas chercher leurs cours : '
+      + 'la valeur du compte à ces dates est estimée, et leur plus-value réalisée n’est pas comptée.',
+      'Tape leur ISIN dans l’onglet Relevé si tu le connais. Pour des droits de souscription (« DS »), laisse vide : ils n’ont pas de cours.', 'releve');
   }
   return out;
 }
@@ -2098,8 +2124,10 @@ function Fn_RendreAlertes() {
   p.textContent = n; p.classList.toggle('cache', !n);
   const noms = { accueil: 'Accueil', releve: 'Relevé', reglages: 'Réglages' };
   $('t-alertes').innerHTML = (n ? '' : '<div class="note note-ok">Rien à faire pour l’instant.</div>')
-    + a.map(x => '<div class="note ' + (x.niveau === 'crit' ? 'note-crit' : x.niveau === 'warn' ? 'note-warn' : '') + '"><b>' + x.rubrique + '</b> · ' + x.html
-      + (x.onglet ? ' <a href="#" data-aller="' + x.onglet + '">Ouvrir ' + noms[x.onglet] + '</a>' : '') + '</div>').join('');
+    + a.map(x => '<div class="note ' + (x.niveau === 'crit' ? 'note-crit' : x.niveau === 'warn' ? 'note-warn' : '') + '">'
+      + '<div class="muet">' + x.rubrique + (x.niveau === 'info' ? ' · pour information' : '') + '</div><b>' + x.titre + '</b>'
+      + '<div style="margin-top:4px"><b>Ce que ça veut dire :</b> ' + x.sens + '</div>'
+      + '<div style="margin-top:4px"><b>Que faire :</b> ' + x.faire + (x.onglet ? ' <a href="#" data-aller="' + x.onglet + '">Ouvrir ' + noms[x.onglet] + '</a>' : '') + '</div></div>').join('');
   $('t-alertes').querySelectorAll('[data-aller]').forEach(l => { l.onclick = e => { e.preventDefault(); Fn_Onglet(l.dataset.aller); }; });
 }
 /* CHOIX DU COMPTE, en haut de la page (dès qu'une capture Bourso existe) : DEGIRO · Bourso · Les deux. Il vaut pour tous
