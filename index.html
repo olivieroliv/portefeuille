@@ -56,6 +56,7 @@ h2 { font-size: 16px; margin: 0 0 4px; }
 .note { border-radius: 10px; padding: 10px 12px; margin: 10px 0; font-size: 14px; border: 1px solid var(--bord); background: var(--surface); }
 .note-ok { border-left: 4px solid var(--bon); }
 .note-warn { border-left: 4px solid var(--alerte); }
+.pastille { display: inline-block; min-width: 16px; margin-left: 3px; padding: 0 4px; border-radius: 8px; font-size: 11px; font-weight: 700; line-height: 16px; background: var(--alerte); color: #fff; vertical-align: 1px; }
 .note-crit { border-left: 4px solid var(--critique); }
 button, .btn { font: inherit; font-size: 14px; border-radius: 8px; border: 1px solid var(--bord); background: var(--surface-2);
   color: var(--encre); padding: 8px 12px; cursor: pointer; display: inline-block; }
@@ -142,6 +143,7 @@ table.gauche-1 th:first-child, table.gauche-1 td:first-child { text-align: left;
     <button type="button" role="tab" data-onglet="revenus">Revenus</button>
     <button type="button" role="tab" data-onglet="analyse">Analyse</button>
     <button type="button" role="tab" data-onglet="releve">Relevé</button>
+    <button type="button" role="tab" data-onglet="alertes" aria-label="Avertissements" title="Avertissements">⚠<span class="pastille cache" id="nb-alertes"></span></button>
     <button type="button" role="tab" data-onglet="reglages" aria-label="Réglages" title="Réglages">⚙</button>
   </nav>
   <div class="choix cache" id="b-compte" role="group" aria-label="Compte affiché"></div>
@@ -231,6 +233,7 @@ table.gauche-1 th:first-child, table.gauche-1 td:first-child { text-align: left;
     <h2>Cours par action</h2>
     <div class="muet" id="cours-etat"></div>
     <div class="reglage"><select id="s-titre" aria-label="Titre"></select></div>
+    <div id="position-detail"></div>
     <div class="choix" id="b-periodes" role="group" aria-label="Période"></div>
     <div class="choix" id="b-resolution" role="group" aria-label="Résolution"></div>
     <div class="legende" id="cours-legende"></div>
@@ -305,6 +308,12 @@ table.gauche-1 th:first-child, table.gauche-1 td:first-child { text-align: left;
     <div class="rang">
       <label class="btn">Importer des relevés Bourso (PDF)<input type="file" accept=".pdf,application/pdf" multiple id="f-releve-bourso" class="cache"></label>
     </div>
+  </section>
+
+  <section class="carte" id="c-alertes" data-onglet="alertes">
+    <h2>Avertissements</h2>
+    <div class="muet">Ce qui demande ton attention : cours introuvables, capture incomplète, relevé manquant… Le chiffre sur l’onglet ⚠ compte ce qu’il y a à faire.</div>
+    <div id="t-alertes"></div>
   </section>
 
   <section class="carte" data-onglet="reglages">
@@ -2038,6 +2047,7 @@ function Fn_Rendre() {
   if (c) { Fn_RendreIndicateurs(k); Fn_GrapheEvolution(k); Fn_GrapheRepartition(c); Fn_GraphePlusValues(c); Fn_RendreEcarts(c); Fn_RendreTableau(c); }
   else $('c-ecarts').classList.add('cache');
   Fn_RendreCompte();
+  Fn_RendreAlertes();
   Fn_RendreCours();
   if (c) Fn_RendreAnalyse();
   Fn_RendreRevenus();
@@ -2045,6 +2055,52 @@ function Fn_Rendre() {
   Fn_RendreReleveBourso();
   const n = Var_Etat.captures.length;
   $('captures-etat').textContent = n ? n + ' capture(s) enregistrée(s), du ' + Fmt_Date(Var_Etat.captures[0].ts) + ' au ' + Fmt_Date(Var_Etat.captures[n - 1].ts) + '.' : 'Aucune capture enregistrée.';
+}
+/* AVERTISSEMENTS (onglet ⚠) : tout ce qui est technique ou demande une action, rassemblé au lieu d'être dispersé dans les
+   cartes. niveau « crit » ou « warn » : compté sur la pastille de l'onglet ; « info » : affiché seulement. */
+function Fn_Avertissements() {
+  const out = [], ajout = (niveau, rubrique, html, onglet) => out.push({ niveau, rubrique, html, onglet });
+  // Cours : le robot (GitHub) et le téléphone (macro « Smart - cours »).
+  const idx = Var_Cours.index, jeton = !!Lire_Local(Cst_CleJeton);
+  if (!jeton) ajout('warn', 'Cours', 'Pas de clé d’accès GitHub : pas de cours. Colle-la une fois dans Réglages, rubrique Cours.', 'reglages');
+  if (Var_Cours.erreur) ajout('crit', 'Cours', 'Mise à jour des cours impossible : ' + Fn_Esc(Var_Cours.erreur), 'reglages');
+  if (idx) {
+    const tel = idx.telephone;
+    ajout('info', 'Cours', 'Cours du ' + Fn_Esc(Fmt_DateHeure(Date.parse(idx.maj))) + ' (robot) · ' + (idx.series || []).length + ' actions avec leurs cours'
+      + (tel ? ' · dernier passage du téléphone (macro « Smart - cours ») : ' + tel.ok + ' cours reçu(s)' + (tel.recu ? ' le ' + Fn_Esc(Fmt_DateHeure(Date.parse(tel.recu))) : '') : '') + '.', null);
+    const lignes = Fn_LignesMemo();
+    const vrais = (idx.introuvables || []).filter(x => !(lignes[x.isin] && lignes[x.isin].etats.every(e => !e.qte)));   // aller-retour dans la journée : pas besoin de cours
+    if (vrais.length) ajout('warn', 'Cours', vrais.length + ' action(s) introuvable(s) chez Yahoo : ' + vrais.map(x => Fn_Esc(x.nom || x.isin)).join(', ')
+      + '. Si tu connais leur symbole Yahoo, impose-le dans Réglages → Cours.', 'reglages');
+    if (idx.alerte) ajout('info', 'Cours', Fn_Esc(idx.alerte) + ' (le robot essaie chaque soir ; rien à faire)', null);
+    if (tel && (tel.ko || tel.refus)) ajout('warn', 'Cours', 'Dernier passage du téléphone : ' + (tel.ko ? tel.ko + ' échec(s) chez Yahoo' : '') + (tel.ko && tel.refus ? ', ' : '')
+      + (tel.refus ? tel.refus + ' dépôt(s) refusé(s) par GitHub' : '') + '. Le robot redemandera ces cours le soir suivant.', null);
+    if (idx.illisibles) ajout('warn', 'Cours', idx.illisibles + ' réponse(s) de Yahoo illisible(s) : le robot les redemandera.', null);
+  }
+  // Captures.
+  const cd = Fn_DerniereDegiro(), cb = Fn_DerniereBourso();
+  if (cd) { const a = Fn_Alertes(cd); if (a.length) ajout('warn', 'Captures', 'Capture DEGIRO du ' + Fn_Esc(Fmt_DateHeure(cd.ts)) + ' : ' + Fn_Esc(a.join(' ; ')) + '.', 'accueil'); }
+  if (cb && !Fn_BoursoComplete(cb)) ajout('warn', 'Captures', 'Capture Bourso du ' + Fn_Esc(Fmt_DateHeure(cb.ts)) + ' incomplète (somme des lignes ≠ évaluation des titres) : '
+    + 'relance-la et fais glisser la liste jusqu’à la dernière ligne pendant les 5 secondes de lecture.', 'accueil');
+  // Bourso : ISIN et historique.
+  if (cb) {
+    const isins = (Var_Etat.bourso || {}).isins || {}, sans = cb.positions.filter(p => !isins[p.nom]);
+    if (sans.length) ajout('warn', 'Bourso', sans.length + ' ligne(s) sans ISIN (' + sans.map(p => Fn_Esc(p.nom)).join(', ') + ') : pas de cours ni de détail. Importe un relevé titres Bourso récent.', 'releve');
+    if (!Fn_MouvementsBourso().length) ajout('warn', 'Bourso', 'Pas d’historique Bourso : Évolution, XIRR, PRU au fil du temps et Revenus ne comptent que DEGIRO. Importe tes relevés Bourso (PDF).', 'releve');
+    const h = Fn_HistoBourso();
+    if (h.ruptures.length) ajout('warn', 'Bourso', 'Relevé espèces Bourso manquant : ' + h.ruptures.map(x => 'entre celui du ' + Fmt_Jour(x.apres) + ' et celui du ' + Fmt_Jour(x.avant)).join(' ; ') + '.', 'releve');
+    if (h.sansIsin.length) ajout('info', 'Bourso', 'Sans ISIN (anciennes lignes, cours absents de l’historique) : ' + h.sansIsin.map(Fn_Esc).join(', ') + '. Tu peux les taper dans l’onglet Relevé.', 'releve');
+  }
+  return out;
+}
+function Fn_RendreAlertes() {
+  const a = Fn_Avertissements(), n = a.filter(x => x.niveau !== 'info').length, p = $('nb-alertes');
+  p.textContent = n; p.classList.toggle('cache', !n);
+  const noms = { accueil: 'Accueil', releve: 'Relevé', reglages: 'Réglages' };
+  $('t-alertes').innerHTML = (n ? '' : '<div class="note note-ok">Rien à faire pour l’instant.</div>')
+    + a.map(x => '<div class="note ' + (x.niveau === 'crit' ? 'note-crit' : x.niveau === 'warn' ? 'note-warn' : '') + '"><b>' + x.rubrique + '</b> · ' + x.html
+      + (x.onglet ? ' <a href="#" data-aller="' + x.onglet + '">Ouvrir ' + noms[x.onglet] + '</a>' : '') + '</div>').join('');
+  $('t-alertes').querySelectorAll('[data-aller]').forEach(l => { l.onclick = e => { e.preventDefault(); Fn_Onglet(l.dataset.aller); }; });
 }
 /* CHOIX DU COMPTE, en haut de la page (dès qu'une capture Bourso existe) : DEGIRO · Bourso · Les deux. Il vaut pour tous
    les onglets ; il est gardé. Tant que l'historique Bourso manque, une ligne dit ce qui ne compte encore que DEGIRO. */
@@ -2056,11 +2112,7 @@ function Fn_RendreCompte() {
   zone.innerHTML = [['D', 'DEGIRO'], ['B', 'Bourso'], ['DB', 'Les deux']].map(([k, l]) => '<button type="button" data-compte="' + k + '" aria-pressed="' + (v === k) + '">' + l + '</button>').join('');
   zone.querySelectorAll('[data-compte]').forEach(b => { b.onclick = () => {
     Var_Etat.reglages = Var_Etat.reglages || {}; Var_Etat.reglages.compte = b.dataset.compte; Fn_Sauver(); Var_Memo.histCle = null; Fn_Rendre(); }; });
-  const isins = (Var_Etat.bourso || {}).isins || {}, cb = Fn_DerniereBourso(), sansIsin = cb.positions.filter(p => !isins[p.nom]).length;
-  note.innerHTML = (Fn_HistoireIncomplete() ? '<div class="note note-warn">Vue « ' + (v === 'B' ? 'Bourso' : 'Les deux') + ' » : les lignes Bourso comptent dans les totaux et '
-      + 'les positions ; l’historique (Évolution, XIRR, PRU au fil du temps, Revenus) attend tes relevés de compte Bourso (onglet Relevé)'
-      + (v === 'DB' ? ' ; en attendant, PRU et Revenus ne montrent que DEGIRO' : '') + '.</div>' : '')
-    + (v !== 'D' && sansIsin ? '<div class="note note-warn">' + sansIsin + ' ligne(s) Bourso sans ISIN : pas encore de cours ni de détail. Importe ton relevé titres Bourso (PDF, onglet Relevé).</div>' : '');
+  note.innerHTML = '';   // ses avertissements (historique Bourso, ISIN) sont dans l'onglet ⚠
 }
 function Fn_Theme() {
   const t = Var_Etat.theme || 'auto';
@@ -2340,26 +2392,77 @@ function Fn_TitresCours() {
   const passes = Fn_ListeSymboles().titres.filter(t => !t.detenu);
   return { detenus, passes };
 }
+/* VOTRE POSITION, en haut de l'onglet Détail : la ligne aujourd'hui (dernière capture du compte affiché) et son histoire
+   (relevés : tous les mouvements de ce titre, ancien ISIN compris). Gain total = somme en euros de ces mouvements (achats,
+   ventes, dividendes, impôts, frais) + valeur actuelle ; rendement annuel = XIRR de ces mêmes mouvements datés. */
+function Fn_HtmlPosition(isin, pos, c) {
+  if (!isin) return '';
+  const corr = Var_Etat.corrections, mv = Fn_Mouvements(), taux = Fn_Taux(mv, corr), vers = {};
+  Fn_Liens().forEach(l => { vers[l.de] = l.vers; });
+  const mvs = mv.filter(m => m.isin && (vers[m.isin] || m.isin) === isin).map(m => ({ m, t: Fn_Classer(m, corr), e: Fn_EnEuros(m, taux) }))
+    .filter(x => x.e && x.t !== 'change' && x.t !== 'interne');
+  const somme = types => mvs.filter(x => types.includes(x.t)).reduce((s, x) => s + x.e.v, 0);
+  const tuile = (lib, val, det, cls) => '<div class="tuile"><div class="lib">' + lib + '</div><div class="val ' + (cls || '') + '" style="font-size:16px">' + val + '</div>'
+    + (det ? '<div class="muet" style="font-size:11.5px">' + det + '</div>' : '') + '</div>';
+  const sym = d => Cst_SymboleDev[d] || d, duree = (a, b) => { const mois = Math.max(0, Math.round((Date.parse(b) - Date.parse(a)) / (30.44 * 86400000)));
+    return mois < 12 ? mois + ' mois' : Math.floor(mois / 12) + ' an' + (mois >= 24 ? 's' : '') + (mois % 12 ? ' ' + (mois % 12) + ' mois' : ''); };
+  const premier = mvs.length ? mvs.reduce((d, x) => x.m.date < d ? x.m.date : d, mvs[0].m.date) : null;
+  const divBrut = somme(['dividende']), divImpot = somme(['impot']), frais = somme(['frais_courtage', 'frais_change', 'taxe', 'frais']);
+  const flux = mvs.reduce((s, x) => s + x.e.v, 0);
+  let html = '';
+  if (pos) {
+    const cout = pos.valeur - (pos.plLat || 0), poids = pos.valeur / c.positions.reduce((s, p) => s + p.valeur, 0) * 100;
+    const varJour = pos.plJour != null && pos.valeur - pos.plJour > 0 ? pos.plJour / (pos.valeur - pos.plJour) * 100 : null;
+    html += tuile('Actions', Fmt_Nb(pos.qte, 0), pos.courtier === 'DB' ? 'chez DEGIRO et Bourso' : pos.courtier === 'B' ? 'chez Bourso' : 'chez DEGIRO')
+      + tuile('PRU', Fmt_Nb(pos.pru, 3) + ' ' + sym(pos.dev), 'frais d’achat compris' + (pos.pruDegiro != null && Math.abs(pos.pruDegiro - pos.pru) > 1e-6 ? ' · DEGIRO : ' + Fmt_Nb(pos.pruDegiro, 3) : ''))
+      + tuile('Cours', Fmt_Nb(pos.cours, 3) + ' ' + sym(pos.dev), varJour != null ? '<span class="' + Cls_Signe(varJour) + '">' + Fmt_Pct(varJour, 2, true) + '</span> sur le jour' : '')
+      // En devise aussi (une ligne cotée en pence, GBX, est montrée en livres).
+      + tuile('Valeur de la ligne', Fmt_Eur(pos.valeur), 'poids ' + Fmt_Pct(poids, 1) + (pos.dev !== 'EUR' && pos.qte && pos.cours
+        ? ' · ' + (pos.dev === 'GBX' ? Fmt_Dev(pos.qte * pos.cours / 100, 'GBP') : Fmt_Dev(pos.qte * pos.cours, pos.dev)) : ''))
+      + tuile('Coût d’achat', Fmt_Eur(cout), 'actions × PRU, en euros')
+      + tuile('Plus-value latente', Fmt_Signe(pos.plLat), Fmt_Pct(pos.plPct, 1, true), Cls_Signe(pos.plLat));
+  }
+  if (mvs.length) {
+    const ligne = Fn_LignesMemo()[isin];
+    let debut = premier, ventes = 0, nbVentes = 0;
+    if (ligne) {   // cycle en cours : depuis la dernière fois que la ligne était à zéro ; ventes partielles de ce cycle
+      let k0 = 0; ligne.apres.forEach((a, k) => { if (a.qte === 0 && k + 1 < ligne.ops.length) k0 = k + 1; });
+      debut = ligne.ops[k0] ? ligne.ops[k0].date : premier;
+      ligne.ops.forEach((o, k) => { if (k < k0 || o.type !== 'vente' || ligne.apres[k].qte === 0) return;
+        const e = o.devMontant === 'EUR' ? o.montant : ((Fn_EnEuros({ dev: o.devMontant, montant: o.montant, date: o.date, heure: o.heure }, taux) || {}).v);
+        const av = ligne.apres[k - 1]; if (e != null && av && av.pruEur != null) { ventes += e - o.qte * av.pruEur; nbVentes++; } });
+    }
+    const fin = pos ? Fn_Jour(c.ts) : mvs[mvs.length - 1].m.date;
+    const fx = mvs.map(x => ({ t: Fn_JourUtc(x.m.date), m: x.e.v })).concat(pos ? [{ t: Fn_JourUtc(Fn_Jour(c.ts)), m: pos.valeur }] : []);
+    const xirr = Fn_Xirr(fx), jours = (Date.parse(fin) - Date.parse(premier)) / 86400000;
+    const gain = flux + (pos ? pos.valeur : 0), bourso = mvs.some(x => x.m.source === 'bourso');
+    html += (pos ? tuile('Détenue depuis', Fmt_Jour(debut), duree(debut, fin)) : tuile('Vendue', 'le ' + Fmt_Jour(mvs[mvs.length - 1].m.date), 'achetée le ' + Fmt_Jour(premier)))
+      + tuile('Dividendes reçus', Fmt_Eur(divBrut + divImpot), divBrut ? 'nets · brut ' + Fmt_Eur(divBrut) + ' · impôt ' + Fmt_Eur(divImpot) : 'depuis le ' + Fmt_Jour(premier))
+      + (nbVentes ? tuile('Ventes partielles', Fmt_Signe(ventes), nbVentes + ' vente(s), résultat encaissé', Cls_Signe(ventes)) : '')
+      + tuile('Frais payés', Fmt_Eur(Math.abs(frais)), bourso && !frais ? 'compris dans les montants (Bourso)' : 'courtage, taxes, change')
+      + tuile(pos ? 'Gain total de la ligne' : 'Résultat final', Fmt_Signe(gain), pos ? 'plus-value + ventes + dividendes − frais' : 'ventes + dividendes − achats − frais', Cls_Signe(gain))
+      + tuile('Rendement annuel', xirr == null ? '—' : Fmt_Pct(xirr * 100, 1, true) + ' / an', jours < 365 ? 'moins d’un an : peu significatif' : 'XIRR depuis le ' + Fmt_Jour(premier), Cls_Signe(xirr));
+  } else if (pos && pos.courtier !== 'D' && Fn_HistoireIncomplete()) html += '<div class="muet" style="grid-column:1/-1">L’histoire de cette ligne viendra avec tes relevés Bourso (onglet Relevé).</div>';
+  let tab = '';
+  if (pos && pos.parCourtier) tab = '<div class="defile"><table><thead><tr><th>Courtier</th><th>Actions</th><th>PRU</th><th>Valeur</th><th>+/− latente</th></tr></thead><tbody>'
+    + pos.parCourtier.map(p => '<tr><td>' + (p.courtier === 'B' ? 'Bourso' : 'DEGIRO') + '</td><td>' + Fmt_Nb(p.qte, 0) + '</td><td>' + Fmt_Nb(p.pru, 3) + '</td><td>' + Fmt_Eur(p.valeur)
+      + '</td><td class="' + Cls_Signe(p.plLat) + '">' + Fmt_Signe(p.plLat) + '</td></tr>').join('') + '</tbody></table></div>';
+  return html ? '<h2 style="margin-top:10px">Votre position</h2><div class="tuiles">' + html + '</div>' + tab : '';
+}
 function Fn_RendreCours() {
   const c = Fn_Derniere();
   // Sans capture : seulement les réglages (la clé d'accès se colle avant la première capture, qui écrase le presse-papier).
-  ['s-titre', 'b-periodes', 'b-resolution', 'cours-legende', 'g-cours', 'bloc-ecart', 'cours-stats'].forEach(id => { const e = $(id); (e.closest('.reglage') || e).classList.toggle('cache', !c); });
+  ['s-titre', 'position-detail', 'b-periodes', 'b-resolution', 'cours-legende', 'g-cours', 'bloc-ecart', 'cours-stats'].forEach(id => { const e = $(id); (e.closest('.reglage') || e).classList.toggle('cache', !c); });
   if (!c) { $('cours-etat').textContent = Lire_Local(Cst_CleJeton) ? 'Clé d’accès enregistrée. Les graphiques des cours s’afficheront après la première capture.'
     : 'Collez d’abord la clé d’accès GitHub (onglet Réglages, rubrique Cours) ; les graphiques des cours s’afficheront après la première capture.'; Fn_RendreReglagesCours(); return; }
   const jeton = !!Lire_Local(Cst_CleJeton), idx = Var_Cours.index;
   let etat;
   if (!jeton) etat = 'Pour afficher les cours, il faut une fois une clé d’accès GitHub (onglet Réglages, rubrique Cours).';
   else if (Var_Cours.enCours) etat = 'Mise à jour des cours…';
-  else if (idx) etat = 'Cours du ' + Fmt_DateHeure(Date.parse(idx.maj)) + ' (robot) · ' + (idx.series || []).length + ' séries'
-    + ((idx.introuvables || []).length ? ' · ' + idx.introuvables.length + ' titre(s) introuvable(s), voir les réglages' : '');
+  else if (idx) etat = 'Cours du ' + Fmt_DateHeure(Date.parse(idx.maj)) + '.';
   else etat = 'Aucun cours pour l’instant.';
-  // Compte rendu du dernier passage du téléphone (macro « Smart - cours »), repris par le robot.
-  const tel = idx && idx.telephone;
-  if (tel) etat += ' · téléphone : ' + tel.ok + ' cours reçu(s)' + (tel.ko ? ', ' + tel.ko + ' échec(s) chez Yahoo' : '') + (tel.refus ? ', ' + tel.refus + ' dépôt(s) refusé(s)' : '')
-    + (tel.fin ? ' (' + tel.fin + ')' : '');
-  if (idx && idx.illisibles) etat += ' · ' + idx.illisibles + ' réponse(s) illisible(s)';
-  if (idx && idx.alerte) etat += ' — ' + idx.alerte;
-  if (Var_Cours.erreur) etat += ' — ' + Var_Cours.erreur;
+  // Le détail (robot, téléphone, titres introuvables) est dans l'onglet ⚠ Avertissements.
+  if (Fn_Avertissements().some(x => x.rubrique === 'Cours' && x.niveau !== 'info')) etat += ' ⚠ Voir l’onglet Avertissements.';
   $('cours-etat').textContent = etat;
   const { detenus, passes } = Fn_TitresCours();
   if (!Var_Vue.isin || ![...detenus, ...passes].some(t => t.isin === Var_Vue.isin)) Var_Vue.isin = detenus.length ? detenus[0].isin : null;
@@ -2375,6 +2478,7 @@ function Fn_RendreCours() {
   document.querySelectorAll('#b-periodes button').forEach(b => b.onclick = () => { Var_Vue.periode = b.dataset.p; if ((b.dataset.p === '1J' || b.dataset.p === '5J') && aMinute) Var_Vue.resolution = 'minute'; Fn_RendreCours(); });
   document.querySelectorAll('#b-resolution button').forEach(b => b.onclick = () => { if (!b.disabled) { Var_Vue.resolution = b.dataset.r; Fn_RendreCours(); } });
   const pos = c.positions.find(p => p.isin === Var_Vue.isin) || null;
+  $('position-detail').innerHTML = Fn_HtmlPosition(Var_Vue.isin, pos, c);
   const pts = Var_Vue.isin ? Fn_PointsCours(Var_Vue.isin, Var_Vue.periode, Var_Vue.resolution) : null;
   const ops = Var_Vue.resolution === 'jour' ? Fn_Operations(Fn_Mouvements(), Var_Vue.isin, Fn_Liens()) : [];
   const ligne = Fn_LignesMemo()[Var_Vue.isin] || null;
