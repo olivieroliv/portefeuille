@@ -1444,12 +1444,41 @@ function Fn_Melanger(D, B) {
   });
   const somme = k => D.marge[k] != null && B.marge[k] != null ? D.marge[k] + B.marge[k] : null;
   const titres = (D.marge.titres != null ? D.marge.titres : D.positions.reduce((s, p) => s + p.valeur, 0)) + (B.marge.titres || 0);
-  return Object.assign({}, D, { positions: out, marge: { titres, cash: somme('cash'), vl: somme('vl') }, tsBourso: B.ts, melange: true });
+  return Object.assign({}, D, { positions: out, marge: { titres, cash: somme('cash'), vl: somme('vl') }, tsBourso: B.ts, melange: true,
+    tsValeur: Math.max(D.tsValeur || D.ts, B.tsValeur || B.ts), estimee: D.estimee || B.estimee, estimeeD: D.estimee, estimeeB: B.estimee, opsDepuis: (D.opsDepuis || 0) + (B.opsDepuis || 0) });
+}
+/* VALEUR À LA DERNIÈRE CLÔTURE (choix de l'utilisateur, 17/11/2026) : quand une capture est plus ancienne que le dernier cours
+   de clôture reçu du robot, et qu'aucune opération n'est connue depuis, ses lignes sont revalorisées à cette clôture : quantités
+   et PRU de la capture, cours Yahoo, change BCE du jour ; les liquidités restent celles de la capture. Une ligne sans clôture plus
+   récente, ou avec une division d'actions depuis la capture, garde le cours de la capture. Une opération connue depuis (relevé,
+   écran Mouvements) : les quantités ont pu changer, la capture est gardée telle quelle (opsDepuis). */
+function Fn_Revaloriser(cap, mouvements) {
+  if (!cap) return cap;
+  const jourCap = Fn_Jour(cap.ts), fx = Fn_Fx();
+  const ops = (mouvements || []).filter(m => m.date > jourCap && /^(achat|vente|operation_titres)$/.test(Fn_Classer(m, Var_Etat.corrections))).length;
+  if (ops) return Object.assign({}, cap, { opsDepuis: ops });
+  let jourClot = null, n = 0;
+  const positions = cap.positions.map(p => {
+    const s = Fn_Serie(p.isin);
+    if (!s || p.qte == null) return p;
+    const i = s.jours.length - 1, j = s.jours[i];
+    if (!(j > jourCap) || (s.divisions || []).some(d => d.j > jourCap)) return p;
+    const t = Fn_TauxAu(fx, s.devise, j), tPrec = i > 0 ? Fn_TauxAu(fx, s.devise, s.jours[i - 1]) : null;
+    if (!t) return p;
+    const valeur = p.qte * s.clotures[i] / t, cout = p.valeur - (p.plLat || 0);
+    n++; if (!jourClot || j > jourClot) jourClot = j;
+    return Object.assign({}, p, { cours: s.clotures[i], valeur, plLat: valeur - cout, plPct: cout > 0 ? (valeur - cout) / cout * 100 : null,
+      plJour: tPrec ? valeur - p.qte * s.clotures[i - 1] / tPrec : null, estime: j });
+  });
+  if (!n) return cap;
+  const titres = positions.reduce((s, p) => s + (p.valeur || 0), 0), cash = cap.marge.cash;
+  return Object.assign({}, cap, { positions, marge: Object.assign({}, cap.marge, { titres, vl: cash != null ? titres + cash : null }),
+    estimee: jourClot, nbEstimees: n, tsValeur: Date.parse(jourClot + 'T17:35:00') });
 }
 function Fn_Derniere() {
   const v = Fn_Compte(), d = Fn_DerniereDegiro(), cb = Fn_DerniereBourso();
-  const D = d ? Object.assign({}, d, { positions: Fn_PositionsDegiroFrais(d).map(p => Object.assign({ courtier: 'D' }, p)) }) : null;
-  const B = cb ? Fn_CaptureBourso(cb) : null;
+  const D = d ? Fn_Revaloriser(Object.assign({}, d, { positions: Fn_PositionsDegiroFrais(d).map(p => Object.assign({ courtier: 'D' }, p)) }), Fn_MouvementsDegiro()) : null;
+  const B = cb ? Fn_Revaloriser(Fn_CaptureBourso(cb), Fn_MouvementsBourso()) : null;
   if (v === 'D') return D;
   if (v === 'B') return B;
   return D && B ? Fn_Melanger(D, B) : (D || B);
@@ -1672,13 +1701,13 @@ function Fn_Calculs() {
   const vl = m.vl != null ? m.vl : (m.cash != null ? titres + m.cash : null);
   const plLat = c.positions.reduce((s, p) => s + (p.plLat || 0), 0);
   const investi = titres - plLat;
-  const jour = Fn_Jour(c.ts);
+  const tsV = c.tsValeur || c.ts, jour = Fn_Jour(tsV);   // date de la valeur : la clôture quand la capture a été revalorisée
   const incomplet = Fn_HistoireIncomplete();   // vue avec Bourso, relevés Bourso pas encore importés : pas de XIRR faux
   const mv = incomplet ? [] : Fn_Mouvements();
   const { flux, horsEuro } = Fn_Flux(mv, Var_Etat.corrections, jour);
   const releve = mv.length > 0;
   const verse = releve ? flux.reduce((s, f) => s + f.montant, 0) : null;
-  const fluxX = Fn_FluxXirr(flux, vl, c.ts);
+  const fluxX = Fn_FluxXirr(flux, vl, tsV);
   const xirr = Fn_Xirr(fluxX);
   const premier = flux.length ? flux.reduce((m, f) => f.date < m ? f.date : m, flux[0].date) : null;   // le plus ancien, quel que soit l'ordre
   const bilan = releve ? Fn_Bilan(mv.filter(x => x.date <= jour), Var_Etat.corrections, Fn_Taux(mv, Var_Etat.corrections)) : null;
@@ -1690,7 +1719,7 @@ function Fn_Calculs() {
   return { c, titres, vl, cash: m.cash, plLat, plPct: investi > 0 ? plLat / investi * 100 : null, releve, incomplet, verse,
     gain: verse != null && vl != null ? vl - verse : null, xirr, premier, horsEuro, frais, dividendes,
     fraisApprox: !!bilan && approx(tFrais), divApprox: !!bilan && approx(tDiv),
-    dureeJours: premier ? (c.ts - new Date(premier + 'T12:00:00').getTime()) / 86400000 : null };
+    dureeJours: premier ? (tsV - new Date(premier + 'T12:00:00').getTime()) / 86400000 : null };
 }
 function Fn_RendreSynthese(k) {
   if (!k) {
@@ -1699,8 +1728,9 @@ function Fn_RendreSynthese(k) {
     return;
   }
   const v = Fn_Compte(), cb = Fn_DerniereBourso(), cd = Fn_DerniereDegiro();
-  $('entete').textContent = v === 'DB' ? 'DEGIRO : capture du ' + Fmt_DateHeure(cd.ts) + ' · Bourso : capture du ' + Fmt_DateHeure(cb.ts) + ' · ' + k.c.positions.length + ' positions'
-    : (v === 'B' ? 'Bourso : capture du ' : 'Capture du ') + Fmt_DateHeure(k.c.ts) + ' · ' + k.c.positions.length + ' positions' + (k.c.compte === 'basic' ? ' · compte sans crédit' : '');
+  const clot = j => j ? ' (cours de clôture du ' + Fmt_Jour(j) + ')' : '';
+  $('entete').textContent = v === 'DB' ? 'DEGIRO : capture du ' + Fmt_DateHeure(cd.ts) + clot(k.c.estimeeD) + ' · Bourso : capture du ' + Fmt_DateHeure(cb.ts) + clot(k.c.estimeeB) + ' · ' + k.c.positions.length + ' positions'
+    : (v === 'B' ? 'Bourso : capture du ' : 'Capture du ') + Fmt_DateHeure(k.c.ts) + clot(k.c.estimee) + ' · ' + k.c.positions.length + ' positions' + (k.c.compte === 'basic' ? ' · compte sans crédit' : '');
   const tuile = (lib, val, det, cls) => '<div class="tuile"><div class="lib">' + lib + '</div><div class="val ' + (cls || '') + '">' + val + '</div>'
     + (det ? '<div class="det">' + det + '</div>' : '') + '</div>';
   const sansReleve = k.incomplet ? 'importer les relevés Bourso (onglet Relevé)' : 'importer le relevé de compte';
@@ -1709,6 +1739,9 @@ function Fn_RendreSynthese(k) {
     + (k.horsEuro.length ? ' · ⚠ ' + k.horsEuro.length + ' versement(s) ou retrait(s) en devise non compté(s) : taux faussé' : '');
   $('v-synthese').innerHTML = '<div class="carte"><div class="heros-lib">' + (v === 'DB' ? 'Valeur nette des deux comptes' : v === 'B' ? 'Valeur nette du compte Bourso' : 'Valeur nette du compte')
     + '</div><div class="heros">' + Fmt_Eur(k.vl) + '</div>'
+    // Valeur revalorisée au cours de clôture (capture plus ancienne), ou opérations connues depuis la capture.
+    + (k.c.estimee ? '<div class="muet">Estimée au cours de clôture du ' + Fmt_Jour(k.c.estimee) + ' : pas de capture depuis. Si tu as acheté, vendu ou versé depuis, refais une capture.</div>' : '')
+    + (k.c.opsDepuis ? '<div class="note note-warn">Des opérations ont eu lieu depuis la dernière capture : positions et valeur ne sont plus à jour. Refais une capture.</div>' : '')
     + '<div class="tuiles">'
     + tuile('Valeur des titres', Fmt_Eur(k.titres), k.c.positions.length + ' lignes')
     + tuile('Liquidités', Fmt_Eur(k.cash))
