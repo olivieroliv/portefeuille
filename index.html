@@ -1459,8 +1459,13 @@ function Fn_MomentCours(id, j) {
   const m = Var_Cours.minute[id], t = m && m.t && m.t.length ? m.t[m.t.length - 1] * 1000 : null;
   return t && Fn_Jour(t) === j ? t : Date.parse(j + 'T17:35:00');
 }
-// « cours de clôture du 20/11/26 » après la clôture de Paris, « cours du 21/11/26 14:05 » en pleine séance.
-const Fn_LibCours = ts => { const d = new Date(ts); return d.getHours() * 60 + d.getMinutes() >= 17 * 60 + 29 ? 'cours de clôture du ' + Fmt_Jour(Fn_Jour(ts)) : 'cours du ' + Fmt_DateHeure(ts); };
+// « cours de clôture du 20/11/26 » quand le dernier passage du téléphone a eu lieu ce jour-là après 22 h (New York fermé) ou plus
+// tard ; sinon « cours du 21/11/26 14:05 » (passage lancé à la main en pleine séance). Sans compte rendu : 17 h 30 passées.
+const Fn_LibCours = ts => {
+  const tel = Var_Cours.index && Var_Cours.index.telephone, recu = tel && tel.recu ? Date.parse(tel.recu) : null, d = new Date(ts);
+  const clot = recu ? recu >= Date.parse(Fn_Jour(ts) + 'T22:00:00') : d.getHours() * 60 + d.getMinutes() >= 17 * 60 + 29;
+  return clot ? 'cours de clôture du ' + Fmt_Jour(Fn_Jour(ts)) : 'cours du ' + Fmt_DateHeure(ts);
+};
 function Fn_Revaloriser(cap, mouvements) {
   if (!cap) return cap;
   const jourCap = Fn_Jour(cap.ts), heureCap = String(new Date(cap.ts).getHours()).padStart(2, '0') + ':' + String(new Date(cap.ts).getMinutes()).padStart(2, '0'), fx = Fn_Fx();
@@ -2116,7 +2121,7 @@ function Fn_Avertissements() {
   if (idx) {
     const tel = idx.telephone;
     ajout('info', 'Cours', 'Dernière mise à jour des cours : ' + Fn_Esc(Fmt_DateHeure(Date.parse(idx.maj))),
-      'Chaque soir de semaine à 22 h 30, ton téléphone (macro « Smart - cours ») demande les cours à Yahoo et les dépose sur GitHub, où le robot les range. '
+      'Chaque soir de semaine à 22 h 30, et quand tu appuies sur le widget Smart-Cours, ton téléphone (macro « Smart - cours ») demande les cours à Yahoo et les dépose sur GitHub, où le robot les range. '
       + (idx.series || []).length + ' actions ont aujourd’hui leurs cours.' + (tel ? ' Au dernier passage' + (tel.recu ? ', le ' + Fn_Esc(Fmt_DateHeure(Date.parse(tel.recu))) : '')
         + ', le téléphone a rapporté ' + tel.ok + ' cours.' : ''),
       'Rien : c’est une information.', null);
