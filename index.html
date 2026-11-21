@@ -1447,33 +1447,44 @@ function Fn_Melanger(D, B) {
   return Object.assign({}, D, { positions: out, marge: { titres, cash: somme('cash'), vl: somme('vl') }, tsBourso: B.ts, melange: true,
     tsValeur: Math.max(D.tsValeur || D.ts, B.tsValeur || B.ts), estimee: D.estimee || B.estimee, estimeeD: D.estimee, estimeeB: B.estimee, opsDepuis: (D.opsDepuis || 0) + (B.opsDepuis || 0) });
 }
-/* VALEUR À LA DERNIÈRE CLÔTURE (choix de l'utilisateur, 17/11/2026) : quand une capture est plus ancienne que le dernier cours
-   de clôture reçu du robot, et qu'aucune opération n'est connue depuis, ses lignes sont revalorisées à cette clôture : quantités
-   et PRU de la capture, cours Yahoo, change BCE du jour ; les liquidités restent celles de la capture. Une ligne sans clôture plus
-   récente, ou avec une division d'actions depuis la capture, garde le cours de la capture. Une opération connue depuis (relevé,
-   écran Mouvements) : les quantités ont pu changer, la capture est gardée telle quelle (opsDepuis). */
+/* VALEUR AU DERNIER COURS (choix de l'utilisateur, 17/11/2026) : quand une capture est plus ancienne que le dernier cours reçu
+   du robot, et qu'aucune opération n'est connue depuis, ses lignes sont revalorisées à ce cours : quantités et PRU de la capture,
+   cours Yahoo, change BCE du jour ; les liquidités restent celles de la capture. « Plus ancienne » se juge à l'heure : une capture
+   de 15 h est revalorisée à la clôture du même soir. Une ligne sans cours plus récent, ou avec une division d'actions depuis la
+   capture, garde le cours de la capture. Une opération connue depuis (relevé, écran Mouvements) : les quantités ont pu changer,
+   la capture est gardée telle quelle (opsDepuis). */
+// Moment du dernier cours d'un titre : dernier point à la minute de ce jour (17 h 30 à Paris, 22 h à New York ; en pleine séance,
+// l'heure du passage lancé à la main), sinon 17 h 35.
+function Fn_MomentCours(id, j) {
+  const m = Var_Cours.minute[id], t = m && m.t && m.t.length ? m.t[m.t.length - 1] * 1000 : null;
+  return t && Fn_Jour(t) === j ? t : Date.parse(j + 'T17:35:00');
+}
+// « cours de clôture du 20/11/26 » après la clôture de Paris, « cours du 21/11/26 14:05 » en pleine séance.
+const Fn_LibCours = ts => { const d = new Date(ts); return d.getHours() * 60 + d.getMinutes() >= 17 * 60 + 29 ? 'cours de clôture du ' + Fmt_Jour(Fn_Jour(ts)) : 'cours du ' + Fmt_DateHeure(ts); };
 function Fn_Revaloriser(cap, mouvements) {
   if (!cap) return cap;
-  const jourCap = Fn_Jour(cap.ts), fx = Fn_Fx();
-  const ops = (mouvements || []).filter(m => m.date > jourCap && /^(achat|vente|operation_titres)$/.test(Fn_Classer(m, Var_Etat.corrections))).length;
+  const jourCap = Fn_Jour(cap.ts), heureCap = String(new Date(cap.ts).getHours()).padStart(2, '0') + ':' + String(new Date(cap.ts).getMinutes()).padStart(2, '0'), fx = Fn_Fx();
+  // Opération après la capture : un jour suivant, ou le même jour à une heure plus tardive (relevé DEGIRO : « 15:42 »).
+  const apres = m => m.date > jourCap || (m.date === jourCap && /^\d\d:\d\d/.test(m.heure || '') && m.heure.slice(0, 5) > heureCap);
+  const ops = (mouvements || []).filter(m => apres(m) && /^(achat|vente|operation_titres)$/.test(Fn_Classer(m, Var_Etat.corrections))).length;
   if (ops) return Object.assign({}, cap, { opsDepuis: ops });
-  let jourClot = null, n = 0;
+  let moment = 0, n = 0;
   const positions = cap.positions.map(p => {
     const s = Fn_Serie(p.isin);
     if (!s || p.qte == null) return p;
-    const i = s.jours.length - 1, j = s.jours[i];
-    if (!(j > jourCap) || (s.divisions || []).some(d => d.j > jourCap)) return p;
+    const i = s.jours.length - 1, j = s.jours[i], tc = Fn_MomentCours(p.isin, j);
+    if (!(tc > cap.ts) || (s.divisions || []).some(d => d.j > jourCap)) return p;
     const t = Fn_TauxAu(fx, s.devise, j), tPrec = i > 0 ? Fn_TauxAu(fx, s.devise, s.jours[i - 1]) : null;
     if (!t) return p;
     const valeur = p.qte * s.clotures[i] / t, cout = p.valeur - (p.plLat || 0);
-    n++; if (!jourClot || j > jourClot) jourClot = j;
+    n++; if (tc > moment) moment = tc;
     return Object.assign({}, p, { cours: s.clotures[i], valeur, plLat: valeur - cout, plPct: cout > 0 ? (valeur - cout) / cout * 100 : null,
       plJour: tPrec ? valeur - p.qte * s.clotures[i - 1] / tPrec : null, estime: j });
   });
   if (!n) return cap;
   const titres = positions.reduce((s, p) => s + (p.valeur || 0), 0), cash = cap.marge.cash;
   return Object.assign({}, cap, { positions, marge: Object.assign({}, cap.marge, { titres, vl: cash != null ? titres + cash : null }),
-    estimee: jourClot, nbEstimees: n, tsValeur: Date.parse(jourClot + 'T17:35:00') });
+    estimee: moment, nbEstimees: n, tsValeur: moment });
 }
 function Fn_Derniere() {
   const v = Fn_Compte(), d = Fn_DerniereDegiro(), cb = Fn_DerniereBourso();
@@ -1728,7 +1739,7 @@ function Fn_RendreSynthese(k) {
     return;
   }
   const v = Fn_Compte(), cb = Fn_DerniereBourso(), cd = Fn_DerniereDegiro();
-  const clot = j => j ? ' (cours de clôture du ' + Fmt_Jour(j) + ')' : '';
+  const clot = ts => ts ? ' (' + Fn_LibCours(ts) + ')' : '';
   $('entete').textContent = v === 'DB' ? 'DEGIRO : capture du ' + Fmt_DateHeure(cd.ts) + clot(k.c.estimeeD) + ' · Bourso : capture du ' + Fmt_DateHeure(cb.ts) + clot(k.c.estimeeB) + ' · ' + k.c.positions.length + ' positions'
     : (v === 'B' ? 'Bourso : capture du ' : 'Capture du ') + Fmt_DateHeure(k.c.ts) + clot(k.c.estimee) + ' · ' + k.c.positions.length + ' positions' + (k.c.compte === 'basic' ? ' · compte sans crédit' : '');
   const tuile = (lib, val, det, cls) => '<div class="tuile"><div class="lib">' + lib + '</div><div class="val ' + (cls || '') + '">' + val + '</div>'
@@ -1740,7 +1751,7 @@ function Fn_RendreSynthese(k) {
   $('v-synthese').innerHTML = '<div class="carte"><div class="heros-lib">' + (v === 'DB' ? 'Valeur nette des deux comptes' : v === 'B' ? 'Valeur nette du compte Bourso' : 'Valeur nette du compte')
     + '</div><div class="heros">' + Fmt_Eur(k.vl) + '</div>'
     // Valeur revalorisée au cours de clôture (capture plus ancienne), ou opérations connues depuis la capture.
-    + (k.c.estimee ? '<div class="muet">Estimée au cours de clôture du ' + Fmt_Jour(k.c.estimee) + ' : pas de capture depuis. Si tu as acheté, vendu ou versé depuis, refais une capture.</div>' : '')
+    + (k.c.estimee ? '<div class="muet">Estimée au ' + Fn_LibCours(k.c.estimee) + ' : pas de capture depuis. Si tu as acheté, vendu ou versé depuis, refais une capture.</div>' : '')
     + (k.c.opsDepuis ? '<div class="note note-warn">Des opérations ont eu lieu depuis la dernière capture : positions et valeur ne sont plus à jour. Refais une capture.</div>' : '')
     + '<div class="tuiles">'
     + tuile('Valeur des titres', Fmt_Eur(k.titres), k.c.positions.length + ' lignes')
@@ -3464,6 +3475,17 @@ function Fn_RendreAnalyse() {
   $('s-modele').onchange = e => { Var_Etat.reglages = Object.assign(Var_Etat.reglages || {}, { modele: e.target.value }); Fn_Sauver(); Fn_RendreAnalyse(); };
   $('s-effort').onchange = e => { Var_Etat.reglages = Object.assign(Var_Etat.reglages || {}, { effort: e.target.value }); Fn_Sauver(); };
 }
+
+/* Cours suivis : quand la page revient à l'écran, puis toutes les 2 minutes tant qu'elle est affichée, Smart demande à GitHub si le
+   robot a publié de nouveaux cours (une seule petite demande) et ne recharge que dans ce cas. Ainsi un onglet resté ouvert depuis
+   l'après-midi montre les clôtures du soir, et un passage lancé avec le widget Smart-Cours apparaît sans recharger la page. */
+async function Fn_SuivreCours() {
+  if (document.hidden || Var_Cours.enCours || !Lire_Local(Cst_CleJeton)) return;
+  try { const b = await Fn_Gh('branches/donnees'); if (b && (await b.json()).commit.sha !== Var_Cours.sha) Fn_ChargerCours(false); }
+  catch (e) { /* réseau coupé : on réessaie au tour suivant */ }
+}
+document.addEventListener('visibilitychange', Fn_SuivreCours);
+setInterval(Fn_SuivreCours, 120000);
 
 Fn_Theme(); Fn_Onglet('accueil'); Fn_ReceptionAuto(); Fn_ChargerCours(false); Fn_SuivreAnalyseRobot();
 </script>
