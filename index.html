@@ -1548,6 +1548,25 @@ function Fn_IntegrerBourso(texte, source) {
   Fn_Sauver();
   return { ok: true, bourso: true, cap: enr, nouveaux, lus: cap.mouvements.length };
 }
+/* CAPTURE DE LA MACRO UNIQUE « Smart - DEGIRO et Bourso » : le document DEGIRO (===VIGIE:…===) suivi du document Bourso
+   (===SMART-BOURSO…), dans un seul texte. Chaque partie est intégrée à part ; l'une peut manquer (capture interrompue). Un texte
+   d'une seule partie (anciennes macros, archives) passe par le même chemin. */
+function Fn_PartsCapture(t) {
+  const s = String(t || ''), i = s.search(/^[ \t]*===SMART-BOURSO/m);
+  return { degiro: i < 0 ? s : s.slice(0, i), bourso: i < 0 ? '' : s.slice(i) };
+}
+function Fn_IntegrerTout(t, source) {
+  const p = Fn_PartsCapture(t), r = {};
+  if (/===VIGIE:META===/.test(p.degiro)) r.degiro = Fn_Integrer(p.degiro, source);
+  if (p.bourso) r.bourso = Fn_IntegrerBourso(p.bourso, source);
+  if (!r.degiro && !r.bourso) r.degiro = Fn_Integrer(t, source);   // ni l'un ni l'autre : le message d'erreur de la capture DEGIRO
+  return r;
+}
+function Fn_BilanTout(r) {
+  $('reception').innerHTML = '';
+  if (r.degiro) Fn_BilanReception(r.degiro, true);
+  if (r.bourso) Fn_BilanBourso(r.bourso, true);
+}
 /* RELEVÉS BOURSO EN PDF, lus dans le navigateur avec pdf.js (chargé à la demande depuis jsDelivr ; le fichier ne quitte pas
    l'appareil). Trois sortes, reconnues à leur contenu : relevés espèces (l'historique : achats, ventes, versements,
    dividendes nets, frais), relevés titres (quantités trimestrielles et ISIN), relevés de dividendes (brut et impôt).
@@ -1645,17 +1664,18 @@ function Fn_RendreReleveBourso() {
 }
 function Fn_DerniereBourso() { const c = ((Var_Etat.bourso || {}).captures || []); return c.length ? c[c.length - 1] : null; }
 const Fn_BoursoComplete = c => c && c.controle && c.controle.ecart != null && Math.abs(c.controle.ecart) <= Math.max(1, (c.titres || 0) * 0.0005);
-function Fn_BilanBourso(r) {
-  if (!r.ok) { Fn_NoteReception('crit', '<b>Capture Bourso non intégrée.</b> ' + Fn_Esc(r.message)); return; }
+function Fn_BilanBourso(r, ajout) {
+  if (!r.ok) { Fn_NoteReception('crit', '<b>Capture Bourso non intégrée.</b> ' + Fn_Esc(r.message), ajout); return; }
   const c = r.cap, k = c.controle, complet = Fn_BoursoComplete(c);
   Fn_NoteReception(complet ? 'ok' : 'warn', '<b>Capture Bourso du ' + Fn_Esc(Fmt_DateHeure(c.ts)) + ' intégrée</b> — ' + c.positions.length + ' ligne(s)'
     + (complet ? ', somme des lignes = évaluation des titres. Tes lignes Bourso sont dans les positions : choisis « Bourso » ou « Les deux » en haut de la page.'
       : k.ecran == null ? '. L’évaluation des titres n’a pas été lue (le haut du compte-titres n’était pas à l’écran) : impossible de vérifier qu’il ne manque pas de ligne.'
       : '. <b>Il manque des lignes</b> : somme ' + Fn_Esc(Fmt_Eur(k.somme, 2)) + ' pour ' + Fn_Esc(Fmt_Eur(k.ecran, 2)) + ' à l’écran. Relance la capture et, '
         + 'pendant les 5 secondes de lecture, fais glisser la liste jusqu’à la dernière ligne.')
-    + (r.lus ? ' ' + r.lus + ' mouvement(s) lu(s), dont ' + r.nouveaux + ' nouveau(x).' : ''));
+    + (r.lus ? ' ' + r.lus + ' mouvement(s) lu(s), dont ' + r.nouveaux + ' nouveau(x).' : ''), ajout);
 }
-function Fn_NoteReception(type, html) { $('reception').innerHTML = '<div class="note note-' + type + '">' + html + '</div>'; }
+// ajout : la note s'ajoute à la précédente (capture DEGIRO puis Bourso) au lieu de la remplacer.
+function Fn_NoteReception(type, html, ajout) { $('reception').innerHTML = (ajout ? $('reception').innerHTML : '') + '<div class="note note-' + type + '">' + html + '</div>'; }
 function Fn_Alertes(c) {
   const k = c.controle, out = [];
   if (k.attendues != null && k.attendues !== k.lues) out.push(k.lues + ' ligne(s) lue(s) sur ' + k.attendues + ' livrées par la macro');
@@ -1666,13 +1686,13 @@ function Fn_Alertes(c) {
   if (c.positions.some(p => p.qte == null)) out.push('quantité illisible : ' + c.positions.filter(p => p.qte == null).map(p => p.nom).join(', '));
   return out;
 }
-function Fn_BilanReception(r) {
-  if (!r.ok) { Fn_NoteReception('crit', '<b>Capture non intégrée.</b> ' + Fn_Esc(r.message)); return; }
+function Fn_BilanReception(r, ajout) {
+  if (!r.ok) { Fn_NoteReception('crit', '<b>Capture DEGIRO non intégrée.</b> ' + Fn_Esc(r.message), ajout); return; }
   const a = Fn_Alertes(r.cap);
   const v = Fn_VersementsProbables(Var_Etat.captures, Fn_MouvementsDegiro(), Var_Etat.corrections).filter(x => x.au === Fn_Jour(r.cap.ts));
-  Fn_NoteReception(a.length || v.length ? 'warn' : 'ok', '<b>Capture du ' + Fn_Esc(Fmt_DateHeure(r.cap.ts)) + ' intégrée</b> — ' + r.cap.controle.lues + ' position(s)'
+  Fn_NoteReception(a.length || v.length ? 'warn' : 'ok', '<b>Capture DEGIRO du ' + Fn_Esc(Fmt_DateHeure(r.cap.ts)) + ' intégrée</b> — ' + r.cap.controle.lues + ' position(s)'
     + (a.length ? '. À vérifier : ' + Fn_Esc(a.join(' ; ')) + '.' : ', somme des lignes = valeur des titres de l’écran.')
-    + v.map(x => '<br>' + Fn_HtmlVersement(x)).join(''));
+    + v.map(x => '<br>' + Fn_HtmlVersement(x)).join(''), ajout);
 }
 // Versement ou retrait deviné entre deux captures (voir Fn_VersementsProbables).
 function Fn_HtmlVersement(v) {
@@ -1690,31 +1710,22 @@ async function Fn_ReceptionAuto() {
   try { history.replaceState(null, '', location.pathname); } catch (e) { /* adresse laissée telle quelle */ }
   const recevoir = async () => {
     const t = await navigator.clipboard.readText();
-    if (bourso || /^\s*===SMART-BOURSO/.test(t)) {
-      const cap = Fn_LireCaptureBourso(t);
-      if (!cap.erreur && (Date.now() - cap.ts) / 60000 > Cst_AgeMaxCaptureMin) {
-        Fn_NoteReception('warn', 'La capture Bourso du presse-papier date du ' + Fn_Esc(Fmt_DateHeure(cap.ts)) + ' : ce n’est pas celle qui vient d’être faite.'
-          + '<div class="rang"><button id="b-forcer">L’intégrer quand même</button></div>');
-        $('b-forcer').onclick = () => { Fn_BilanBourso(Fn_IntegrerBourso(t, 'macro')); Fn_Rendre(); };
-        return;
-      }
-      Fn_BilanBourso(Fn_IntegrerBourso(t, 'macro')); Fn_Rendre();
-      return;
-    }
-    if (releve) {
+    if (releve && !/===VIGIE:META===|===SMART-BOURSO/.test(t)) {
       const b = Fn_ImporterReleve(t, 'relevé de l’appli DEGIRO');
       Fn_Sauver(); Fn_NoteReception(b.ok ? 'ok' : 'warn', 'Relevé reçu — ' + b.texte); Fn_Rendre();
       return;
     }
-    const cap = Fn_LireCapture(t);
-    if (!cap.erreur && cap.ts && (Date.now() - cap.ts) / 60000 > Cst_AgeMaxCaptureMin) {
-      Fn_NoteReception('warn', 'La capture du presse-papier date du ' + Fn_Esc(Fmt_DateHeure(cap.ts)) + ' : ce n’est pas celle qui vient d’être faite.'
+    // Capture DEGIRO, Bourso, ou les deux à la suite (macro unique) : l'heure retenue est celle de la partie la plus récente.
+    const p = Fn_PartsCapture(t), cd = /===VIGIE:META===/.test(p.degiro) ? Fn_LireCapture(p.degiro) : null, cb = p.bourso ? Fn_LireCaptureBourso(p.bourso) : null;
+    const ts = Math.max(cd && !cd.erreur && cd.ts ? cd.ts : 0, cb && !cb.erreur ? cb.ts : 0);
+    const integrer = () => { Fn_BilanTout(Fn_IntegrerTout(t, 'macro')); Fn_Rendre(); };
+    if (ts && (Date.now() - ts) / 60000 > Cst_AgeMaxCaptureMin) {
+      Fn_NoteReception('warn', 'La capture du presse-papier date du ' + Fn_Esc(Fmt_DateHeure(ts)) + ' : ce n’est pas celle qui vient d’être faite.'
         + '<div class="rang"><button id="b-forcer">L’intégrer quand même</button></div>');
-      $('b-forcer').onclick = () => { Fn_BilanReception(Fn_Integrer(t, 'macro')); Fn_Rendre(); };
+      $('b-forcer').onclick = integrer;
       return;
     }
-    Fn_BilanReception(Fn_Integrer(t, 'macro'));
-    Fn_Rendre();
+    integrer();
   };
   try { await recevoir(); }
   catch (e) {
@@ -2235,14 +2246,13 @@ window.addEventListener('scroll', () => {
 const lireFichier = f => new Promise((ok, ko) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = ko; r.readAsText(f, 'utf-8'); });
 
 $('b-coller').onclick = () => $('zone-collage').classList.toggle('cache');
-// Une capture Bourso collée ou importée se reconnaît à son en-tête.
-const Fn_EstBourso = t => /^\s*===SMART-BOURSO/.test(t);
+// Une capture collée ou importée : DEGIRO, Bourso, ou les deux à la suite (macro unique), reconnues à leurs en-têtes.
 $('b-integrer').onclick = () => { const t = $('t-collage').value;
-  if (Fn_EstBourso(t)) Fn_BilanBourso(Fn_IntegrerBourso(t, 'collage')); else Fn_BilanReception(Fn_Integrer(t, 'collage'));
+  Fn_BilanTout(Fn_IntegrerTout(t, 'collage'));
   $('t-collage').value = ''; Fn_Rendre(); window.scrollTo(0, 0); };
 $('f-captures').onchange = async e => {
   let ok = 0, ko = 0;
-  for (const f of e.target.files) { const t = await lireFichier(f), r = Fn_EstBourso(t) ? Fn_IntegrerBourso(t, 'archive') : Fn_Integrer(t, 'archive'); r.ok ? ok++ : ko++; }
+  for (const f of e.target.files) { const t = await lireFichier(f), r = Fn_IntegrerTout(t, 'archive'); [r.degiro, r.bourso].filter(Boolean).forEach(x => { x.ok ? ok++ : ko++; }); }
   Fn_NoteReception(ko ? 'warn' : 'ok', ok + ' capture(s) importée(s)' + (ko ? ', ' + ko + ' fichier(s) ignoré(s) (pas une capture, ou capture incomplète)' : '') + '.');
   e.target.value = ''; Fn_Rendre(); window.scrollTo(0, 0);
 };
