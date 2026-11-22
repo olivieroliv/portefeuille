@@ -366,8 +366,9 @@ table.gauche-1 th:first-child, table.gauche-1 td:first-child { text-align: left;
       <button id="b-theme">Thème : auto</button>
       <button id="b-effacer">Tout effacer</button>
     </div>
-    <div class="muet" style="margin-top:6px">Vos données restent dans ce navigateur, sur cet appareil. Seules partent sur votre dépôt GitHub privé la liste
-      de vos titres (pour les cours) et, quand vous la lancez, la demande d’une analyse complète.</div>
+    <div class="muet" style="margin-top:6px">Vos données sont gardées dans ce navigateur et, une fois la clé GitHub enregistrée (rubrique Cours), copiées
+      dans votre dépôt GitHub privé (branche « etat »). Sur un autre téléphone, ouvrez Smart et collez la même clé : il se met à jour tout seul.</div>
+    <div class="muet" id="sync-etat"></div>
   </section>
 </main>
 
@@ -1361,6 +1362,11 @@ const Etat_Vide = () => ({ captures: [], releve: null, corrections: {}, theme: '
   bourso: { captures: [], mouvements: [] } });
 let Var_Etat = Etat_Vide();
 try { const s = localStorage.getItem(Cst_Cle); if (s) Var_Etat = Object.assign(Etat_Vide(), JSON.parse(s)); } catch (e) { /* stockage indisponible */ }
+/* COPIE SUR GITHUB : avec la clé d'accès, l'état (sauf le thème, propre à chaque appareil) est aussi gardé dans le dépôt privé,
+   branche « etat » (fichier etat.json). Chaque appareil y relit ce que les autres ont changé : Smart ouvert sur un autre
+   téléphone est à jour sans rien transférer. Voir Fn_SyncEtat. */
+const Cst_CleSync = 'portefeuille-sync';   // ce que cet appareil sait de la copie : commit, blob et empreinte de l'état échangé
+let Var_Sync = { enCours: false, encore: false, essais: 0, minuteur: null, erreur: null, ts: null };
 
 const $ = id => document.getElementById(id);
 const Fn_Esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1377,7 +1383,7 @@ function Fn_Alleger(garder) {
 function Fn_Sauver() {
   Fn_Alleger(Cst_CapturesCompletes);
   for (const garder of [Cst_CapturesCompletes, 10, 2]) {
-    try { localStorage.setItem(Cst_Cle, JSON.stringify(Var_Etat)); $('alerte-stockage').innerHTML = ''; return true; }
+    try { localStorage.setItem(Cst_Cle, JSON.stringify(Var_Etat)); $('alerte-stockage').innerHTML = ''; Fn_PlanifierSync(); return true; }
     catch (e) { Fn_Alleger(garder); }
   }
   $('alerte-stockage').innerHTML = '<div class="note note-crit"><b>Enregistrement impossible</b> : le stockage du navigateur est plein ou bloqué. '
@@ -2328,6 +2334,76 @@ async function Fn_GhFichier(chemin, ref) {
 }
 const Fn_Base64 = s => { const o = new TextEncoder().encode(s); let b = ''; for (let i = 0; i < o.length; i += 0x8000) b += String.fromCharCode.apply(null, o.subarray(i, i + 0x8000)); return btoa(b); };
 const Fn_DeBase64 = b => new TextDecoder().decode(Uint8Array.from(atob(String(b).replace(/\s/g, '')), c => c.charCodeAt(0)));
+
+/* COPIE DE L'ÉTAT (branche « etat » du dépôt privé). Chaque appareil retient le commit qu'il a envoyé ou repris en dernier :
+   - la copie a changé ailleurs → on la reprend ; si cet appareil avait aussi changé quelque chose, ses captures sont gardées
+     (réunies avec celles de la copie) et le tout est renvoyé ;
+   - sinon, si l'état d'ici a changé → on l'envoie (refusé par GitHub si la copie a bougé entre-temps : on recommence).
+   Un appareil sans données ne crée jamais la copie. */
+const Fn_Partage = e => JSON.stringify(Object.assign({}, e, { theme: undefined }));
+const Fn_Empreinte = s => { let h = 2166136261; for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619); return (h >>> 0).toString(36) + '.' + s.length; };
+function Fn_PlanifierSync() { clearTimeout(Var_Sync.minuteur); Var_Sync.minuteur = setTimeout(Fn_SyncEtat, 3000); }
+function Fn_FusionEtat(L, R) {
+  const unir = (a, b, cle) => { const vus = new Set((a || []).map(cle)); return (a || []).concat((b || []).filter(x => !vus.has(cle(x)))); };
+  const parTs = x => x.ts, M = Object.assign(Etat_Vide(), R), lb = L.bourso || {};
+  M.captures = unir(M.captures, L.captures, parTs).sort((x, y) => x.ts - y.ts);
+  M.bourso = Object.assign({ captures: [], mouvements: [] }, M.bourso);
+  M.bourso.captures = unir(M.bourso.captures, lb.captures, parTs).sort((x, y) => x.ts - y.ts);
+  M.bourso.mouvements = unir(M.bourso.mouvements, lb.mouvements, m => [m.date, m.type, m.libelle, m.nom, m.isin, m.montant, m.qte].join('|'))
+    .sort((x, y) => x.date < y.date ? -1 : x.date > y.date ? 1 : 0);
+  if (lb.isins || M.bourso.isins) M.bourso.isins = Object.assign({}, lb.isins, M.bourso.isins);
+  const nbImports = e => (e && e.imports || []).length;
+  if (nbImports(L.releve) > nbImports(M.releve)) M.releve = L.releve;
+  M.analyses = unir(M.analyses, L.analyses, parTs).sort((x, y) => y.ts - x.ts).slice(0, 10);
+  return M;
+}
+async function Fn_SyncEtat() {
+  if (!Lire_Local(Cst_CleJeton)) return;
+  if (Var_Sync.enCours) { Var_Sync.encore = true; return; }
+  Var_Sync.enCours = true; Var_Sync.encore = false;
+  const json = async r => { if (!r) throw new Error('dépôt introuvable'); return r.json(); };
+  const post = o => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(o) });
+  let base = {};
+  try { base = JSON.parse(Lire_Local(Cst_CleSync) || '{}'); } catch (e) { base = {}; }
+  const noter = (commit, blob, texte) => { base = { commit, blob, emp: Fn_Empreinte(texte) }; Ecrire_Local(Cst_CleSync, JSON.stringify(base)); };
+  try {
+    const b = await Fn_Gh('branches/etat');
+    if (!b) {
+      if (!Var_Etat.captures.length && !((Var_Etat.bourso || {}).captures || []).length) return;
+      const texte = Fn_Partage(Var_Etat);
+      const t = await json(await Fn_Gh('git/trees', post({ tree: [{ path: 'etat.json', mode: '100644', type: 'blob', content: texte }] })));
+      const c = await json(await Fn_Gh('git/commits', post({ message: 'État de Smart', tree: t.sha, parents: [] })));
+      await json(await Fn_Gh('git/refs', post({ ref: 'refs/heads/etat', sha: c.sha })));
+      noter(c.sha, t.tree[0].sha, texte);
+    } else {
+      const commit = (await b.json()).commit.sha;
+      if (commit !== base.commit) {
+        const sale = Fn_Empreinte(Fn_Partage(Var_Etat)) !== base.emp && (Var_Etat.captures.length + ((Var_Etat.bourso || {}).captures || []).length > 0);
+        const f = await json(await Fn_Gh('contents/etat.json?ref=' + commit, { headers: { Accept: 'application/vnd.github.object+json' } }));
+        const R = JSON.parse(Fn_DeBase64(f.content || (await json(await Fn_Gh('git/blobs/' + f.sha))).content));
+        const recu = Object.assign(Etat_Vide(), R, { theme: Var_Etat.theme });
+        Var_Etat = Object.assign(sale ? Fn_FusionEtat(Var_Etat, R) : recu, { theme: Var_Etat.theme });
+        noter(commit, f.sha, Fn_Partage(recu));
+        Var_Memo = {}; Fn_Sauver(); Fn_Rendre();
+      }
+      const texte = Fn_Partage(Var_Etat);
+      if (Fn_Empreinte(texte) !== base.emp) {
+        const r = await json(await Fn_Gh('contents/etat.json', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: 'État de Smart', branch: 'etat', sha: base.blob, content: Fn_Base64(texte) }) }));
+        noter(r.commit.sha, r.content.sha, texte);
+      }
+    }
+    Var_Sync.erreur = null; Var_Sync.ts = Date.now(); Var_Sync.essais = 0;
+  } catch (e) {
+    Var_Sync.erreur = e.message;
+    if (/répondu (409|422)/.test(e.message) && ++Var_Sync.essais <= 3) Var_Sync.encore = true;   // la copie a bougé pendant l'envoi
+  } finally {
+    Var_Sync.enCours = false;
+    if (Var_Sync.encore) setTimeout(Fn_SyncEtat, 1000);
+    $('sync-etat').textContent = Var_Sync.erreur ? 'Copie GitHub non faite : ' + Var_Sync.erreur + ' (nouvel essai dans 2 minutes).'
+      : Var_Sync.ts ? 'Copie GitHub à jour (' + Fmt_DateHeure(Var_Sync.ts) + ').' : '';
+  }
+}
 const Cst_DevSymbole = { '€': 'EUR', '$': 'USD', '£': 'GBP' };
 const Cst_SymboleDev = { EUR: '€', USD: '$', GBP: '£' };   // code → symbole (GBX, CHF… gardent leur code)
 
@@ -2370,6 +2446,7 @@ async function Fn_ChargerCours(forcer) {
   if (!Lire_Local(Cst_CleJeton) || Var_Cours.enCours) { Fn_RendreCours(); return; }
   Var_Cours.enCours = true; Var_Cours.erreur = null; Fn_RendreCours();
   try {
+    await Fn_SyncEtat();   // d'abord l'état à jour : la liste des titres envoyée ensuite en dépend
     try { if (await Fn_SyncSymboles()) Var_Cours.envoi = Date.now(); }
     catch (e) { Var_Cours.erreur = 'liste des titres non envoyée : ' + e.message; }
     const b = await Fn_Gh('branches/donnees');
@@ -3674,7 +3751,9 @@ function Fn_RendreAnalyse() {
    robot a publié de nouveaux cours (une seule petite demande) et ne recharge que dans ce cas. Ainsi un onglet resté ouvert depuis
    l'après-midi montre les clôtures du soir, et un passage lancé avec le widget Smart-Cours apparaît sans recharger la page. */
 async function Fn_SuivreCours() {
-  if (document.hidden || Var_Cours.enCours || !Lire_Local(Cst_CleJeton)) return;
+  if (document.hidden || !Lire_Local(Cst_CleJeton)) return;
+  Fn_SyncEtat();   // l'état changé sur un autre appareil (même petite demande à GitHub)
+  if (Var_Cours.enCours) return;
   try { const b = await Fn_Gh('branches/donnees'); if (b && (await b.json()).commit.sha !== Var_Cours.sha) Fn_ChargerCours(false); }
   catch (e) { /* réseau coupé : on réessaie au tour suivant */ }
 }
