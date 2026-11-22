@@ -105,6 +105,17 @@ input[type="number"] { width: 70px; }
 .md p { margin: 6px 0; } .md ul, .md ol { margin: 4px 0; padding-left: 20px; } .md li { margin: 2px 0; }
 .md th, .md td { text-align: left; font-size: 12.5px; overflow-wrap: normal; min-width: 76px; } .md hr { border: 0; border-top: 1px solid var(--grille); margin: 12px 0; }
 .md blockquote { margin: 6px 0; padding-left: 10px; border-left: 3px solid var(--grille); color: var(--encre-2); }
+/* Détail : en-tête de l'action (pastille, nom, cours, variation du jour) et défilement des lignes. */
+.entete-titre { display: flex; gap: 14px; align-items: center; margin: 12px 0 6px; }
+.logo-titre { flex: 0 0 58px; height: 58px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 21px; letter-spacing: 0.5px; }
+.entete-titre .nom { font-size: 24px; font-weight: 700; line-height: 1.15; overflow-wrap: anywhere; }
+.entete-titre .place { color: var(--encre-2); font-size: 13.5px; margin-top: 3px; }
+.cours-titre { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin-top: 6px; }
+.cours-titre .prix { font-size: 30px; font-weight: 700; line-height: 1.1; }
+.cours-titre .dev { font-size: 14px; font-weight: 600; margin-left: 4px; }
+.cours-titre .var { font-size: 16px; font-weight: 600; }
+.nav-titre { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0; }
+.nav-titre button { flex: 0 0 auto; padding: 8px 14px; }
 .rapport p { margin: 4px 0; }
 .rapport .item { padding: 6px 0; border-bottom: 1px solid var(--grille); }
 .badge { display: inline-block; font-size: 11.5px; font-weight: 600; padding: 1px 6px; border-radius: 6px; background: var(--surface-2); color: var(--encre-2); margin-right: 6px; }
@@ -233,6 +244,8 @@ table.gauche-1 th:first-child, table.gauche-1 td:first-child { text-align: left;
     <h2>Cours par action</h2>
     <div class="muet" id="cours-etat"></div>
     <div class="reglage"><select id="s-titre" aria-label="Titre"></select></div>
+    <div class="nav-titre" id="nav-titre"></div>
+    <div id="titre-entete"></div>
     <div id="position-detail"></div>
     <div class="choix" id="b-periodes" role="group" aria-label="Période"></div>
     <div class="choix" id="b-resolution" role="group" aria-label="Résolution"></div>
@@ -245,6 +258,7 @@ table.gauche-1 th:first-child, table.gauche-1 td:first-child { text-align: left;
       <div class="graphe" id="g-ecart"></div>
     </div>
     <div id="cours-stats"></div>
+    <div id="analyse-titre"></div>
   </section>
 
   <section class="carte" id="c-plusvalues-realisees" data-onglet="revenus">
@@ -1459,13 +1473,15 @@ function Fn_MomentCours(id, j) {
   const m = Var_Cours.minute[id], t = m && m.t && m.t.length ? m.t[m.t.length - 1] * 1000 : null;
   return t && Fn_Jour(t) === j ? t : Date.parse(j + 'T17:35:00');
 }
-// « cours de clôture du 20/11/26 » quand le dernier passage du téléphone a eu lieu ce jour-là après 22 h (New York fermé) ou plus
-// tard ; sinon « cours du 21/11/26 14:05 » (passage lancé à la main en pleine séance). Sans compte rendu : 17 h 30 passées.
-const Fn_LibCours = ts => {
+// Un dernier cours est une clôture quand le téléphone l'a demandé au moins 25 minutes plus tard : plus aucun échange entre-temps,
+// le marché était fermé (en séance, le dernier point date de quelques minutes, un quart d'heure pour une place à cours différé).
+// Sans compte rendu du téléphone : 17 h 29 passées.
+function Fn_EstCloture(ts) {
   const tel = Var_Cours.index && Var_Cours.index.telephone, recu = tel && tel.recu ? Date.parse(tel.recu) : null, d = new Date(ts);
-  const clot = recu ? recu >= Date.parse(Fn_Jour(ts) + 'T22:00:00') : d.getHours() * 60 + d.getMinutes() >= 17 * 60 + 29;
-  return clot ? 'cours de clôture du ' + Fmt_Jour(Fn_Jour(ts)) : 'cours du ' + Fmt_DateHeure(ts);
-};
+  return recu ? recu - ts >= 25 * 60000 : d.getHours() * 60 + d.getMinutes() >= 17 * 60 + 29;
+}
+// « cours de clôture du 20/11/26 », ou « cours du 21/11/26 14:05 » pour un passage lancé à la main en pleine séance.
+const Fn_LibCours = ts => Fn_EstCloture(ts) ? 'cours de clôture du ' + Fmt_Jour(Fn_Jour(ts)) : 'cours du ' + Fmt_DateHeure(ts);
 function Fn_Revaloriser(cap, mouvements) {
   if (!cap) return cap;
   const jourCap = Fn_Jour(cap.ts), heureCap = String(new Date(cap.ts).getHours()).padStart(2, '0') + ':' + String(new Date(cap.ts).getMinutes()).padStart(2, '0'), fx = Fn_Fx();
@@ -2526,10 +2542,49 @@ function Fn_HtmlPosition(isin, pos, c) {
       + '</td><td class="' + Cls_Signe(p.plLat) + '">' + Fmt_Signe(p.plLat) + '</td></tr>').join('') + '</tbody></table></div>';
   return html ? '<h2 style="margin-top:10px">Votre position</h2><div class="tuiles">' + html + '</div>' + tab : '';
 }
+/* EN-TÊTE DE L'ACTION, en haut de Détail (comme une fiche de cours) : pastille aux initiales (pas de logo : il faudrait le
+   demander à un service extérieur, qui verrait alors la liste de tes actions), nom en gros, symbole · place, cours et
+   variation du jour, et de quand date ce cours. Cours : le plus récent entre le dernier cours du robot et la capture. */
+const Cst_Places = { Paris: 'Euronext Paris', Amsterdam: 'Euronext Amsterdam', Brussels: 'Euronext Bruxelles', Lisbon: 'Euronext Lisbonne', Milan: 'Borsa Italiana',
+  XETRA: 'Xetra', Frankfurt: 'Bourse de Francfort', Swiss: 'SIX Swiss Exchange', LSE: 'Bourse de Londres', Helsinki: 'Nasdaq Helsinki',
+  NYSE: 'NYSE', NasdaqGS: 'Nasdaq', NasdaqGM: 'Nasdaq', NasdaqCM: 'Nasdaq', 'NYSE American': 'NYSE American' };
+const Fn_NomSeul = nom => String(nom || '').replace(/ (D|B|D\+B)$/, '');
+function Fn_Initiales(nom) {
+  const mots = Fn_NomSeul(nom).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Z0-9]+/g, ' ').trim().split(' ')
+    .filter(m => m && !/^(SA|SE|PLC|INC|AG|NV|LTD|CORP|SPA|ADR|ON|CLASS|THE|DE|DU|DES|LA|LE|ET|AND|OF|CIE|GROUP|GROUPE)$/.test(m));
+  return mots.length >= 2 ? mots[0][0] + mots[1][0] : (mots[0] || '?').slice(0, 2);
+}
+function Fn_HtmlEnteteTitre(isin, pos, c) {
+  if (!isin) return '';
+  const s = Fn_Serie(isin), nom = pos ? pos.nom : Fn_NomTitre(isin), hh = ts => { const d = new Date(ts); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+  let teinte = 0; for (const ch of isin) teinte = (teinte * 31 + ch.charCodeAt(0)) % 360;
+  const sym = s && s.symbole ? s.symbole.replace(/\.[A-Z]{1,3}$/, '') : (pos && pos.ticker) || '', place = s && s.place ? (Cst_Places[s.place] || s.place) : '';
+  let prix = null, dev = s ? s.devise : pos && pos.dev, ref = null, quand = '', moment = null;
+  if (s) {
+    const n = s.jours.length, j = s.jours[n - 1];
+    prix = s.clotures[n - 1]; ref = n > 1 ? s.clotures[n - 2] : null; moment = Fn_MomentCours(isin, j);
+    quand = Fn_EstCloture(moment) ? 'À la clôture le ' + Fmt_Jour(j) + ', ' + hh(moment) : 'Cours du ' + Fmt_DateHeure(moment) + ', en séance';
+  }
+  // Une capture plus récente que ce cours (et non revalorisée) donne le cours du moment de la capture.
+  const tsCap = pos ? (pos.courtier === 'B' && c.tsBourso ? c.tsBourso : c.ts) : null;
+  if (pos && pos.cours != null && !pos.estime && (!moment || tsCap > moment + 60000)) {
+    prix = pos.cours; dev = pos.dev; quand = 'Capture du ' + Fmt_DateHeure(tsCap); ref = null;
+    if (s) { const jc = Fn_Jour(tsCap); for (let i = s.jours.length - 1; i >= 0; i--) if (s.jours[i] < jc) { ref = s.clotures[i]; break; } }
+  }
+  const dec = prix != null && Math.abs(prix) < 1 ? 4 : 2, f = v => new Intl.NumberFormat('fr-FR', { minimumFractionDigits: dec, maximumFractionDigits: dec }).format(Math.abs(v));
+  const va = prix != null && ref ? prix - ref : null, vp = va != null ? va / ref * 100 : null;
+  return '<div class="entete-titre"><div class="logo-titre" aria-hidden="true" style="background:hsl(' + teinte + ' 55% 40%)">' + Fn_Esc(Fn_Initiales(nom)) + '</div>'
+    + '<div style="min-width:0"><div class="nom">' + Fn_Esc(nom) + '</div>'
+    + '<div class="place">' + [sym, place].filter(Boolean).map(Fn_Esc).join(' · ') + '</div>'
+    + (prix != null ? '<div class="cours-titre"><span class="prix">' + f(prix) + '<span class="dev">' + Fn_Esc(dev || '') + '</span></span>'
+      + (va != null ? '<span class="var ' + Cls_Signe(va) + '">' + (va > 0 ? '+' : va < 0 ? '−' : '') + f(va) + ' ' + (vp > 0 ? '+' : vp < 0 ? '−' : '') + Fmt_Pct(Math.abs(vp), 2) + '</span>' : '')
+      + '</div><div class="muet">' + quand + '</div>' : '<div class="muet">Pas de cours pour ce titre.</div>')
+    + '</div></div>';
+}
 function Fn_RendreCours() {
   const c = Fn_Derniere();
   // Sans capture : seulement les réglages (la clé d'accès se colle avant la première capture, qui écrase le presse-papier).
-  ['s-titre', 'position-detail', 'b-periodes', 'b-resolution', 'cours-legende', 'g-cours', 'bloc-ecart', 'cours-stats'].forEach(id => { const e = $(id); (e.closest('.reglage') || e).classList.toggle('cache', !c); });
+  ['s-titre', 'nav-titre', 'titre-entete', 'position-detail', 'b-periodes', 'b-resolution', 'cours-legende', 'g-cours', 'bloc-ecart', 'cours-stats', 'analyse-titre'].forEach(id => { const e = $(id); (e.closest('.reglage') || e).classList.toggle('cache', !c); });
   if (!c) { $('cours-etat').textContent = Lire_Local(Cst_CleJeton) ? 'Clé d’accès enregistrée. Les graphiques des cours s’afficheront après la première capture.'
     : 'Collez d’abord la clé d’accès GitHub (onglet Réglages, rubrique Cours) ; les graphiques des cours s’afficheront après la première capture.'; Fn_RendreReglagesCours(); return; }
   const jeton = !!Lire_Local(Cst_CleJeton), idx = Var_Cours.index;
@@ -2546,6 +2601,12 @@ function Fn_RendreCours() {
   $('s-titre').innerHTML = '<optgroup label="Détenus">' + detenus.map(p => '<option value="' + Fn_Esc(p.isin) + '"' + (p.isin === Var_Vue.isin ? ' selected' : '') + '>' + Fn_Esc(p.nom) + '</option>').join('') + '</optgroup>'
     + (passes.length ? '<optgroup label="Vendus (relevé)">' + passes.map(t => '<option value="' + Fn_Esc(t.isin) + '"' + (t.isin === Var_Vue.isin ? ' selected' : '') + '>' + Fn_Esc(t.nom || t.isin) + '</option>').join('') + '</optgroup>' : '');
   $('s-titre').onchange = e => { Var_Vue.isin = e.target.value; Fn_RendreCours(); };
+  // ◀ ▶ : ligne précédente ou suivante, dans la même liste que la ligne affichée (détenues, ou vendues), en boucle.
+  const groupe = (detenus.some(p => p.isin === Var_Vue.isin) ? detenus : passes).map(t => t.isin), iG = groupe.indexOf(Var_Vue.isin);
+  $('nav-titre').innerHTML = groupe.length > 1 ? '<button id="b-titre-prec" aria-label="Action précédente">◀ Précédente</button><span class="muet">' + (iG + 1) + ' / ' + groupe.length
+    + '</span><button id="b-titre-suiv" aria-label="Action suivante">Suivante ▶</button>' : '';
+  const aller = k => { Var_Vue.isin = groupe[(iG + k + groupe.length) % groupe.length]; Fn_RendreCours(); };
+  if (groupe.length > 1) { $('b-titre-prec').onclick = () => aller(-1); $('b-titre-suiv').onclick = () => aller(1); }
   const aMinute = !!(Var_Cours.minute[Var_Vue.isin] && Var_Cours.minute[Var_Vue.isin].t && Var_Cours.minute[Var_Vue.isin].t.length);
   const court = Var_Vue.periode === '1J' || Var_Vue.periode === '5J';
   if (!court) Var_Vue.resolution = 'jour';
@@ -2555,6 +2616,7 @@ function Fn_RendreCours() {
   document.querySelectorAll('#b-periodes button').forEach(b => b.onclick = () => { Var_Vue.periode = b.dataset.p; if ((b.dataset.p === '1J' || b.dataset.p === '5J') && aMinute) Var_Vue.resolution = 'minute'; Fn_RendreCours(); });
   document.querySelectorAll('#b-resolution button').forEach(b => b.onclick = () => { if (!b.disabled) { Var_Vue.resolution = b.dataset.r; Fn_RendreCours(); } });
   const pos = c.positions.find(p => p.isin === Var_Vue.isin) || null;
+  $('titre-entete').innerHTML = Fn_HtmlEnteteTitre(Var_Vue.isin, pos, c);
   $('position-detail').innerHTML = Fn_HtmlPosition(Var_Vue.isin, pos, c);
   const pts = Var_Vue.isin ? Fn_PointsCours(Var_Vue.isin, Var_Vue.periode, Var_Vue.resolution) : null;
   const ops = Var_Vue.resolution === 'jour' ? Fn_Operations(Fn_Mouvements(), Var_Vue.isin, Fn_Liens()) : [];
@@ -2562,6 +2624,7 @@ function Fn_RendreCours() {
   Fn_GrapheCours(pts, pos, ops, ligne);
   Fn_GrapheEcartPru(pts, ligne);
   Fn_RendreStatsCours(pts, pos, ops, ligne);
+  Fn_RendreAnalyseTitre(Var_Vue.isin);
   Fn_RendreReglagesCours();
 }
 function Fn_GrapheCours(pts, pos, ops, ligne) {
@@ -3167,6 +3230,34 @@ function Fn_ConsignesAnalyse(web) {
 /* ANALYSE COMPLÈTE DANS L'APP CLAUDE : une demande autonome (consignes + chiffres) copiée dans le presse-papier, puis Claude
    s'ouvre. Claude y fait lui-même ses recherches sur le web, dans le cadre de l'abonnement : rien n'est facturé sur la clé API.
    Fondamentaux et actualité seulement : l'analyse technique est écartée. */
+// Consignes communes à l'analyse complète et à l'analyse d'une action.
+const Cst_ConsTechnique = 'PAS D’ANALYSE TECHNIQUE : ni graphique, ni support ou résistance, ni moyenne mobile, ni RSI, MACD, figure chartiste ou « momentum ». '
+  + 'Les variations de cours du JSON servent seulement à poser la question « pourquoi ? » ; réponds-y par des faits.';
+const Cst_ConsSources = '- sources primaires : communiqués de résultats, rapport annuel, présentation aux investisseurs (rubrique « Investisseurs » du site de la société), '
+  + 'documents réglementaires (AMF, SEC EDGAR, annonces RNS de Londres, Euronext) ;\n'
+  + '- analyse financière : MarketScreener (ex-Zonebourse), Morningstar, Investir (Les Échos), Le Revenu, Boursorama, Yahoo Finance (statistiques, '
+  + 'estimations des analystes), stockanalysis.com, Seeking Alpha (partie gratuite) ;\n'
+  + '- actualité : dépêches AFP et Reuters (reprises notamment par Boursorama, Le Figaro, Challenges, MarketScreener), Les Échos, Le Monde, L’Agefi, '
+  + 'BFM Business, Financial Times, Bloomberg, Wall Street Journal, CNBC, et la presse économique du pays de la société.\n'
+  + 'Page réservée aux abonnés : dis-le et prends une autre source, sans contourner l’accès.';
+const Cst_ConsFiche = '- l’activité en une phrase, et ce qui fait gagner de l’argent à la société ;\n'
+  + '- les derniers résultats publiés (avec leur date) : chiffre d’affaires et croissance, marge opérationnelle, résultat net, flux de trésorerie disponible, '
+  + 'dette nette ; au-dessus ou en dessous des attentes ;\n'
+  + '- les perspectives annoncées par la direction : relevées, maintenues ou abaissées ;\n'
+  + '- la valorisation : PER actuel et attendu, VE/EBITDA ou le ratio adapté au secteur (banque, assurance, foncière…), rendement du dividende, comparés à '
+  + 'l’historique de la société et à ses concurrents ; le consensus des analystes (nombre, recommandations, objectif de cours moyen, date) ; '
+  + 'la juste valeur de Morningstar si elle est publique ;\n'
+  + '- le dividende : montant, couverture par les bénéfices, prochain détachement ;\n'
+  + '- l’actualité des six derniers mois qui compte : contrats, acquisitions, litiges, réglementation, direction, avertissement sur résultats, '
+  + 'rachats d’actions, augmentation de capital, achats ou ventes des dirigeants ;\n'
+  + '- pourquoi le cours a monté ou baissé (variations du JSON) ;\n'
+  + '- ce qui est solide, ce qui inquiète, et si la thèse d’investissement tient toujours ; pour une ligne en forte perte, dis si la baisse vient '
+  + 'd’un problème durable de l’entreprise ou d’un excès du marché ;\n'
+  + '- ton avis : renforcer, conserver, alléger, vendre ou surveiller, avec la raison principale et ce qui te ferait changer d’avis.';
+const Cst_ConsRegles = 'RÈGLES : chaque chiffre et chaque fait avec sa source et sa date ; des informations récentes, et signale celles qui datent ; '
+  + 'sépare les faits, l’avis des analystes et ton propre avis ; si une information manque ou si les sources se contredisent, dis-le, n’invente rien ; '
+  + 'français simple, termes techniques expliqués en quelques mots (PER, VE/EBITDA…) ; la décision m’appartient : tes avis ne sont ni des ordres '
+  + 'ni un conseil personnalisé.';
 function Fn_DemandeApp(k, sansTete) {
   const d = Fn_DonneesAnalyse(k);
   return [
@@ -3175,31 +3266,9 @@ function Fn_DemandeApp(k, sansTete) {
       + (Fn_Compte() === 'DB' ? 'Mes comptes : un compte-titres DEGIRO et un compte-titres BoursoBank (chaque ligne finit par D ou B, « D+B » si chez les deux), tous deux sans crédit '
         : Fn_Compte() === 'B' ? 'Mon compte : compte-titres BoursoBank sans crédit ' : 'Mon compte : compte-titres DEGIRO sans crédit ')
       + '(ni marge, ni levier, ni vente à découvert) ; je suis un particulier, fiscalité française.',
-    '1. PAS D’ANALYSE TECHNIQUE : ni graphique, ni support ou résistance, ni moyenne mobile, ni RSI, MACD, figure chartiste ou « momentum ». '
-      + 'Les variations de cours du JSON servent seulement à poser la question « pourquoi ? » ; réponds-y par des faits.',
-    '2. CHERCHE SUR LE WEB, pour chaque ligne, de la plus grosse à la plus petite :\n'
-      + '- sources primaires : communiqués de résultats, rapport annuel, présentation aux investisseurs (rubrique « Investisseurs » du site de la société), '
-      + 'documents réglementaires (AMF, SEC EDGAR, annonces RNS de Londres, Euronext) ;\n'
-      + '- analyse financière : MarketScreener (ex-Zonebourse), Morningstar, Investir (Les Échos), Le Revenu, Boursorama, Yahoo Finance (statistiques, '
-      + 'estimations des analystes), stockanalysis.com, Seeking Alpha (partie gratuite) ;\n'
-      + '- actualité : dépêches AFP et Reuters (reprises notamment par Boursorama, Le Figaro, Challenges, MarketScreener), Les Échos, Le Monde, L’Agefi, '
-      + 'BFM Business, Financial Times, Bloomberg, Wall Street Journal, CNBC, et la presse économique du pays de la société.\n'
-      + 'Page réservée aux abonnés : dis-le et prends une autre source, sans contourner l’accès.',
-    '3. POUR CHAQUE LIGNE, une fiche :\n'
-      + '- l’activité en une phrase, et ce qui fait gagner de l’argent à la société ;\n'
-      + '- les derniers résultats publiés (avec leur date) : chiffre d’affaires et croissance, marge opérationnelle, résultat net, flux de trésorerie disponible, '
-      + 'dette nette ; au-dessus ou en dessous des attentes ;\n'
-      + '- les perspectives annoncées par la direction : relevées, maintenues ou abaissées ;\n'
-      + '- la valorisation : PER actuel et attendu, VE/EBITDA ou le ratio adapté au secteur (banque, assurance, foncière…), rendement du dividende, comparés à '
-      + 'l’historique de la société et à ses concurrents ; le consensus des analystes (nombre, recommandations, objectif de cours moyen, date) ; '
-      + 'la juste valeur de Morningstar si elle est publique ;\n'
-      + '- le dividende : montant, couverture par les bénéfices, prochain détachement ;\n'
-      + '- l’actualité des six derniers mois qui compte : contrats, acquisitions, litiges, réglementation, direction, avertissement sur résultats, '
-      + 'rachats d’actions, augmentation de capital, achats ou ventes des dirigeants ;\n'
-      + '- pourquoi le cours a monté ou baissé (variations du JSON) ;\n'
-      + '- ce qui est solide, ce qui inquiète, et si la thèse d’investissement tient toujours ; pour une ligne en forte perte, dis si la baisse vient '
-      + 'd’un problème durable de l’entreprise ou d’un excès du marché ;\n'
-      + '- ton avis : renforcer, conserver, alléger, vendre ou surveiller, avec la raison principale et ce qui te ferait changer d’avis.',
+    '1. ' + Cst_ConsTechnique,
+    '2. CHERCHE SUR LE WEB, pour chaque ligne, de la plus grosse à la plus petite :\n' + Cst_ConsSources,
+    '3. POUR CHAQUE LIGNE, une fiche :\n' + Cst_ConsFiche,
     '4. LE PORTEFEUILLE ENTIER :\n'
       + '- diversification : secteurs, pays, devises, taille des sociétés, dépendance à un même facteur (taux, pétrole, Chine, dollar, consommation…) ;\n'
       + '- concentration, liquidités, frais, dividendes ;\n'
@@ -3215,10 +3284,7 @@ function Fn_DemandeApp(k, sansTete) {
           + 'h) Tout à la fin, après les sources, un bloc ```json et rien après : une liste avec une entrée par ligne DÉTENUE, '
           + '{"isin": "…", "avis": "renforcer" | "conserver" | "alleger" | "vendre" | "surveiller", "raison": "une phrase"} — les mêmes avis que dans tes fiches.'
         : 'Si tout ne tient pas dans une réponse, arrête-toi après une fiche complète et termine par : « Écris “continue” pour la suite. »'),
-    '6. RÈGLES : chaque chiffre et chaque fait avec sa source et sa date ; des informations récentes, et signale celles qui datent ; '
-      + 'sépare les faits, l’avis des analystes et ton propre avis ; si une information manque ou si les sources se contredisent, dis-le, n’invente rien ; '
-      + 'français simple, termes techniques expliqués en quelques mots (PER, VE/EBITDA…) ; la décision m’appartient : tes avis ne sont ni des ordres '
-      + 'ni un conseil personnalisé.',
+    '6. ' + Cst_ConsRegles,
     'LES DONNÉES : montants en euros, change compris au taux réel de chaque transaction. « cours » et « pru » (prix de revient unitaire, frais d’achat compris) '
       + 'dans la devise de cotation (GBX = pence). « poids_pct » : part de la valeur des titres. « plus_value_pct » : en euros, change compris. '
       + '« perf_cours_… » : variation du cours, en devise. « gain_total_ligne_eur » : plus-value latente + résultat des ventes + dividendes − frais. '
@@ -3380,6 +3446,119 @@ async function Fn_RendreAnalyseRobot() {
   zone.innerHTML = entete + html;
   Fn_LiensRapport(zone);
 }
+/* ANALYSE D'UNE ACTION PAR CLAUDE (bas de l'onglet Détail) : même robot et même abonnement que l'analyse complète. La page
+   dépose actions/demandes/<ISIN>.json sur la branche « analyses » ; le résultat revient dans actions/<ISIN>.json, lu à
+   l'ouverture de la ligne (une analyse lancée depuis un autre appareil apparaît donc aussi). La page ne garde que l'attente
+   (Var_Etat.analysesTitres) : les textes restent sur GitHub. */
+const Cst_AttenteTitreMin = 70;   // une analyse complète en attente passe d'abord (40 min au plus), puis l'action (15 min au plus)
+const Var_AnaTitres = {};         // ISIN → dernier résultat lu sur GitHub (null : aucun)
+let Var_AttenteTitres = null;
+function Fn_DemandeTitre(isin) {
+  const c = Fn_Derniere(), d = Fn_DonneesAnalyse(Fn_Calculs()), pos = c.positions.find(p => p.isin === isin);
+  const p = d.positions.find(x => x.isin === isin), v = d.lignes_vendues.find(x => x.isin === isin), s = Fn_Serie(isin);
+  const nom = Fn_NomSeul(p ? p.nom : v ? v.nom : Fn_NomTitre(isin)), yahoo = s && s.symbole;
+  const ou = !pos ? '' : pos.courtier === 'DB' ? ' Je la détiens sur mes deux comptes-titres, DEGIRO et BoursoBank,'
+    : pos.courtier === 'B' ? ' Je la détiens sur mon compte-titres BoursoBank,' : ' Je la détiens sur mon compte-titres DEGIRO,';
+  const donnees = p ? { date: d.date, ligne: Object.assign({}, p, { nom }), valeur_titres_du_compte_eur: d.valeur_titres_eur }
+    : { date: d.date, ligne_vendue: v ? Object.assign({}, v, { nom }) : { nom, isin } };
+  return [
+    'Tu es analyste financier indépendant. Analyse UNE seule action : ' + nom + ' (ISIN ' + isin + (yahoo ? ', symbole Yahoo ' + yahoo : '') + '), '
+      + 'en te fondant sur les fondamentaux de la société et sur l’actualité.' + (p ? ou + ' sans crédit (ni marge, ni levier, ni vente à découvert).'
+        : ' Je l’ai détenue puis vendue.') + ' Je suis un particulier, fiscalité française. Mes chiffres, au ' + d.date + ', sont en JSON à la fin de ce message.',
+    '1. ' + Cst_ConsTechnique,
+    '2. CHERCHE SUR LE WEB :\n' + Cst_ConsSources,
+    '3. LA FICHE :\n' + Cst_ConsFiche + (p ? '' : '\n- action vendue : ce qui a changé depuis ma vente, et si la racheter aujourd’hui se justifierait.'),
+    '4. PRÉSENTATION, en Markdown (titres ###, listes, tableaux), sans titre de premier niveau :\n'
+      + 'a) synthèse en trois à cinq lignes ;\nb) la fiche, rubrique par rubrique ;\nc) calendrier des trois prochains mois : résultats, assemblée générale, '
+      + 'détachement du dividende ;\nd) sources : titre, site, date, lien.\n'
+      + 'Rédige tout en une seule réponse : personne ne pourra te demander la suite.\n'
+      + 'Tout à la fin, après les sources, un bloc ```json et rien après : [{"isin": "' + isin + '", "avis": "renforcer" | "conserver" | "alleger" | "vendre" | "surveiller", '
+      + '"raison": "une phrase"}]' + (p ? '' : ' (action vendue : « renforcer » veut dire la racheter)') + ' — le même avis que dans la fiche.',
+    '5. ' + Cst_ConsRegles,
+    'LES DONNÉES : montants en euros, change compris au taux réel de chaque transaction. « cours » et « pru » (prix de revient unitaire, frais d’achat compris) '
+      + 'dans la devise de cotation (GBX = pence). « poids_pct » : part de la ligne dans la valeur des titres du compte. « plus_value_pct » : en euros, change compris. '
+      + '« perf_cours_… » : variation du cours, en devise. « gain_total_ligne_eur » : plus-value latente + résultat des ventes + dividendes − frais. '
+      + '« operations » : achats et ventes datés. « resultat_eur » d’une ligne vendue : son résultat final en euros.',
+    '```json\n' + JSON.stringify(donnees, null, 1) + '\n```'
+  ].join('\n\n');
+}
+async function Fn_LireAnalyseTitre(isin) {
+  let r;
+  try { r = await Fn_GhFichier('actions/' + isin + '.json', 'analyses'); } catch (e) { delete Var_AnaTitres[isin]; return undefined; }
+  Var_AnaTitres[isin] = r && r.isin === isin ? r : null;
+  return Var_AnaTitres[isin];
+}
+function Fn_RendreAnalyseTitre(isin) {
+  const zone = $('analyse-titre');
+  if (!isin) { zone.innerHTML = ''; return; }
+  const jeton = !!Lire_Local(Cst_CleJeton), etat = (Var_Etat.analysesTitres || {})[isin] || {}, nom = Fn_NomSeul(Fn_NomTitre(isin));
+  // Première ouverture de la ligne : le dernier résultat est lu sur GitHub, puis la section est refaite.
+  if (jeton && !(isin in Var_AnaTitres)) { Var_AnaTitres[isin] = null; Fn_LireAnalyseTitre(isin).then(r => { if (r && Var_Vue.isin === isin) Fn_RendreAnalyseTitre(isin); }); }
+  const r = Var_AnaTitres[isin], bon = r && r.ok ? r : r && r.precedent && r.precedent.ok ? r.precedent : null;
+  let h = '<h2 style="margin-top:18px">Analyse de cette action par Claude</h2>';
+  if (etat.attendu) h += '<div class="note">Analyse de ' + Fn_Esc(nom) + ' en cours depuis ' + Fmt_DateHeure(etat.attendu) + ' : Claude cherche et rédige '
+    + '(5 à 15 minutes, davantage si une analyse complète passe avant). Le résultat s’affichera ici ; tu peux changer d’action ou fermer la page.'
+    + '<div class="rang"><button id="b-ana-titre-verif">Vérifier maintenant</button></div></div>';
+  else h += '<div class="rang"><button class="accent" id="b-ana-titre"' + (jeton ? '' : ' disabled') + '>Analyser ' + Fn_Esc(nom) + ' avec Claude</button></div>'
+    + (jeton ? '' : '<div class="muet">Il faut d’abord l’accès GitHub (onglet Réglages, rubrique Cours) : c’est lui qui porte la demande au robot.</div>')
+    + '<div id="ana-titre-confirmer"></div>';
+  if (etat.perdu) h += '<div class="note note-warn">Le robot n’a pas répondu. Voir l’onglet « Actions » du dépôt portefeuille-cours sur GitHub, puis relancer.</div>';
+  if (r && !r.ok && !etat.attendu) {
+    const reprise = r.quota && r.quota.cinq_heures && r.quota.cinq_heures.reprise;
+    h += r.quota_atteint ? '<div class="note note-warn"><b>Analyse du ' + Fmt_DateHeure(r.ts_demande) + ' : pas faite.</b> ' + Fn_Esc(r.erreur) + ' '
+        + (reprise ? 'Relance après le ' + Fmt_DateHeure(reprise) + '.' : 'Relance dans quelques heures, ou demain.') + '</div>'
+      : '<div class="note note-crit">Analyse du ' + Fmt_DateHeure(r.ts_demande) + ' impossible : ' + Fn_Esc(r.erreur) + '</div>';
+  }
+  let texte = '';
+  if (bon) {
+    const lu = Fn_AvisAnalyse(bon), a = lu.avis.find(x => x.isin === isin); texte = lu.texte;
+    h += '<div class="muet" style="margin-top:8px">Analyse du ' + Fmt_DateHeure(bon.ts_demande) + ' · ' + Fn_Esc((Cst_Modeles[bon.modele] || { nom: bon.modele }).nom)
+      + ' · ' + Math.max(1, Math.round(bon.duree_s / 60)) + ' min · sur ton abonnement Claude</div>'
+      + (a ? '<div class="note" style="margin-top:8px"><b>Avis : ' + Cst_Avis[a.avis] + '</b> — ' + Fn_Esc(a.raison) + '</div>' : '')
+      + '<div class="md" id="ana-titre-texte" data-isin="' + Fn_Esc(isin) + '" data-ts="' + bon.ts_demande + '"><div style="white-space:pre-wrap">' + Fn_Esc(texte) + '</div></div>';
+  }
+  zone.innerHTML = h;
+  if ($('b-ana-titre-verif')) $('b-ana-titre-verif').onclick = Fn_SuivreAnalysesTitres;
+  if ($('b-ana-titre')) $('b-ana-titre').onclick = () => Fn_ConfirmerAnalyseTitre(isin, nom);
+  // Mise en forme du Markdown après coup (modules chargés à la demande) ; rien si l'utilisateur a changé de ligne entre-temps.
+  if (bon) Fn_Markdown(texte).then(html => { const z = $('ana-titre-texte'); if (z && z.dataset.isin === isin && z.dataset.ts === String(bon.ts_demande)) { z.innerHTML = html; Fn_LiensRapport(z); } });
+}
+function Fn_ConfirmerAnalyseTitre(isin, nom) {
+  $('ana-titre-confirmer').innerHTML = '<div class="note note-warn">Claude va chercher les derniers résultats, l’actualité et l’avis des analystes sur <b>' + Fn_Esc(nom)
+    + '</b>, puis rédiger sa fiche (5 à 15 minutes), avec ' + Fn_Esc((Cst_Modeles[Fn_Reglages().modele] || { nom: Fn_Reglages().modele }).nom) + ' (modèle choisi dans Réglages). '
+    + 'Cela prend une part de ton quota Claude, bien moindre qu’une analyse complète ; si le quota est presque épuisé, le robot ne lance rien et le dit ici.'
+    + '<div class="rang"><button class="accent" id="b-ana-titre-go">Lancer l’analyse</button><button id="b-ana-titre-non">Annuler</button></div></div>';
+  $('b-ana-titre-go').onclick = () => Fn_EnvoyerAnalyseTitre(isin);
+  $('b-ana-titre-non').onclick = () => { $('ana-titre-confirmer').innerHTML = ''; };
+}
+async function Fn_EnvoyerAnalyseTitre(isin) {
+  const z = $('ana-titre-confirmer'), ts = Date.now(), chemin = 'contents/actions/demandes/' + isin + '.json';
+  z.innerHTML = '<div class="note">Envoi de la demande…</div>';
+  try {
+    const texte = Fn_DemandeTitre(isin);
+    const actuel = await Fn_Gh(chemin + '?ref=analyses'), sha = actuel ? (await actuel.json()).sha : undefined;
+    await Fn_Gh(chemin, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'Demande d’analyse d’une action', branch: 'analyses', sha, content: Fn_Base64(JSON.stringify({ ts, isin, modele: Fn_Reglages().modele, texte })) }) });
+    await Fn_Gh('dispatches', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ event_type: 'analyse' }) });
+  } catch (e) { z.innerHTML = '<div class="note note-crit">Demande non envoyée : ' + Fn_Esc(e.message) + '</div>'; return; }
+  Var_Etat.analysesTitres = Object.assign(Var_Etat.analysesTitres || {}, { [isin]: { attendu: ts } }); Fn_Sauver();
+  clearTimeout(Var_AttenteTitres); Var_AttenteTitres = setTimeout(Fn_SuivreAnalysesTitres, 60000);
+  Fn_RendreAnalyseTitre(isin);
+}
+// Toutes les minutes tant qu'une analyse d'action est attendue (et au chargement de la page) : le résultat est-il arrivé ?
+async function Fn_SuivreAnalysesTitres() {
+  clearTimeout(Var_AttenteTitres);
+  const etats = Var_Etat.analysesTitres || {}, attendus = Object.keys(etats).filter(i => etats[i].attendu);
+  if (!attendus.length || !Lire_Local(Cst_CleJeton)) return;
+  for (const isin of attendus) {
+    const r = await Fn_LireAnalyseTitre(isin), e = etats[isin];
+    if (r && r.ts_demande === e.attendu) etats[isin] = {};
+    else if (Date.now() - e.attendu > Cst_AttenteTitreMin * 60000) etats[isin] = { perdu: true };
+  }
+  Fn_Sauver();
+  if (Object.keys(etats).some(i => etats[i].attendu)) Var_AttenteTitres = setTimeout(Fn_SuivreAnalysesTitres, 60000);
+  if (attendus.includes(Var_Vue.isin)) Fn_RendreAnalyseTitre(Var_Vue.isin);
+}
 function Fn_EstimationAnalyse(web, m) {
   const p = Cst_Modeles[m], entree = (Fn_ConsignesAnalyse(web).length + JSON.stringify(Fn_DonneesAnalyse(Fn_Calculs())).length + 3000) / 3;
   const bas = web ? (entree * 4 + 30000) * p.e / 1e6 + 8000 * p.s / 1e6 + 3 * Cst_PrixRecherche : entree * p.e / 1e6 + 3000 * p.s / 1e6;
@@ -3492,7 +3671,7 @@ async function Fn_SuivreCours() {
 document.addEventListener('visibilitychange', Fn_SuivreCours);
 setInterval(Fn_SuivreCours, 120000);
 
-Fn_Theme(); Fn_Onglet('accueil'); Fn_ReceptionAuto(); Fn_ChargerCours(false); Fn_SuivreAnalyseRobot();
+Fn_Theme(); Fn_Onglet('accueil'); Fn_ReceptionAuto(); Fn_ChargerCours(false); Fn_SuivreAnalyseRobot(); Fn_SuivreAnalysesTitres();
 </script>
 </body>
 </html>
