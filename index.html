@@ -118,6 +118,9 @@ input[type="number"] { width: 70px; }
 .nav-titre button { flex: 0 0 auto; padding: 8px 14px; }
 .rapport p { margin: 4px 0; }
 .rapport .item { padding: 6px 0; border-bottom: 1px solid var(--grille); }
+.courtier { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .02em; padding: 2px 9px; border-radius: 999px; color: #fff; margin-right: 6px; vertical-align: middle; }
+.courtier-d { background: #1b6fb8; }
+.courtier-b { background: #c8006e; }
 .badge { display: inline-block; font-size: 11.5px; font-weight: 600; padding: 1px 6px; border-radius: 6px; background: var(--surface-2); color: var(--encre-2); margin-right: 6px; }
 select { max-width: 100%; }
 .multiples { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px 16px; margin-top: 8px; }
@@ -204,9 +207,14 @@ table.gauche-1 th:first-child, table.gauche-1 td:first-child { text-align: left;
     <div class="graphe" id="g-perf" style="margin-top:8px"></div>
     <div class="muet" id="perf-sous"></div>
     <ul class="muet calcul">
-      <li><b>En %</b> : rendement pondéré dans le temps (« TWR », la méthode de Bourso). Chaque jour : (valeur nette − versements du jour) ÷ valeur nette de la veille, et ces variations s’enchaînent depuis le début de la période. Un versement ou un retrait ne fait ni monter ni baisser la courbe : elle mesure vos choix d’actions, pas vos apports.</li>
+      <li><b>Rendement TWR</b> (« time-weighted return », rendement pondéré dans le temps, la méthode de Bourso ; c’est la courbe « En % ») :
+        chaque jour, rendement du jour = (valeur nette du jour − versements nets du jour) ÷ valeur nette de la veille − 1, et ces rendements
+        s’enchaînent : TWR = (1 + r<sub>1</sub>) × (1 + r<sub>2</sub>) × … − 1. Un versement ou un retrait ne fait ni monter ni baisser la courbe :
+        le TWR mesure vos <b>choix d’actions</b>, pas le moment ni le montant de vos apports. C’est le chiffre à comparer à un indice ou à un fonds.</li>
+      <li><b>TWR annualisé</b> = (1 + TWR)<sup>365 ÷ nombre de jours</sup> − 1 : le rendement par an qui, répété chaque année, donne le TWR de la période. Affiché sur un an ou plus.</li>
       <li><b>En €</b> : gain de la période = valeur nette du jour − valeur nette au début − versements nets depuis.</li>
-      <li><b>XIRR</b> : le taux annuel qui, appliqué à chaque euro le temps où il est resté sur le compte, redonne la valeur d’aujourd’hui (la valeur du début comptée comme un premier versement). Affiché sur un an ou plus.</li>
+      <li><b>XIRR</b> : le taux annuel qui, appliqué à chaque euro le temps où il est resté sur le compte, redonne la valeur d’aujourd’hui (la valeur du début comptée comme un premier versement). Affiché sur un an ou plus.
+        <b>TWR ou XIRR ?</b> Le XIRR, lui, dépend du moment de vos versements : il mesure le rendement de <b>votre argent</b>. Les deux diffèrent quand vous avez versé beaucoup juste avant une hausse ou une baisse.</li>
       <li>Même base que la valeur nette : après frais de courtage, de change et de connexion, taxe sur les transactions et impôt retenu sur les dividendes ; avant l’impôt français de la déclaration.</li>
     </ul>
   </section>
@@ -302,18 +310,18 @@ table.gauche-1 th:first-child, table.gauche-1 td:first-child { text-align: left;
   </section>
 
   <section class="carte" id="c-releve" data-onglet="releve">
-    <h2>Relevé de compte</h2>
+    <h2><span class="courtier courtier-d">DEGIRO</span>Relevé de compte</h2>
     <div class="muet">Le relevé DEGIRO (fichier CSV) donne vos versements et retraits — c'est lui qui permet le XIRR, le rendement annuel de votre
       argent — ainsi que les dividendes, impôts, frais et opérations de change. Importez-le une fois depuis l'ouverture du compte ; ensuite, après
       chaque versement ou retrait, importez un relevé récent : les mouvements déjà connus ne sont pas comptés deux fois.</div>
     <div id="releve-etat"></div>
     <div class="rang">
-      <label class="btn">Importer un relevé (CSV)<input type="file" accept=".csv,text/csv,text/comma-separated-values" multiple id="f-releve" class="cache"></label>
+      <label class="btn">Importer un relevé DEGIRO (CSV)<input type="file" accept=".csv,text/csv,text/comma-separated-values" multiple id="f-releve" class="cache"></label>
     </div>
   </section>
 
   <section class="carte" id="c-releve-bourso" data-onglet="releve">
-    <h2>Relevés Bourso</h2>
+    <h2><span class="courtier courtier-b">Bourso</span>Relevés de compte</h2>
     <div class="muet">Les relevés PDF de BoursoBank, lus ici même (rien n’est envoyé ; nom, adresse et numéros de compte sont ignorés).
       Sélectionne-les tous d’un coup, dans n’importe quel ordre ; un relevé déjà importé n’est pas compté deux fois.
       <b>Relevés espèces</b> : l’historique (achats, ventes, versements, dividendes, frais). <b>Relevés titres</b> : l’ISIN de chaque action et
@@ -1495,23 +1503,31 @@ function Fn_Revaloriser(cap, mouvements) {
   const apres = m => m.date > jourCap || (m.date === jourCap && /^\d\d:\d\d/.test(m.heure || '') && m.heure.slice(0, 5) > heureCap);
   const ops = (mouvements || []).filter(m => apres(m) && /^(achat|vente|operation_titres)$/.test(Fn_Classer(m, Var_Etat.corrections))).length;
   if (ops) return Object.assign({}, cap, { opsDepuis: ops });
-  let moment = 0, n = 0;
+  /* LIGNE EN RETARD (capture du 23/11/2026 à 22 h 43) : le soir, l'appli DEGIRO peut afficher sur ses lignes le cours et le change de
+     la séance PRÉCÉDENTE, alors que son résumé est juste. Une ligne lue après la dernière clôture du robot, au cours exact de la
+     clôture d'avant et pas à celle-ci, est donc remise à la dernière clôture (avec son change). */
+  const egal = (a, b) => Math.abs(a - b) <= 1e-4 * Math.abs(b);
+  let moment = 0, n = 0, nVeille = 0, jVeille = null;
   const positions = cap.positions.map(p => {
     const s = Fn_Serie(p.isin);
     if (!s || p.qte == null) return p;
     const i = s.jours.length - 1, j = s.jours[i], tc = Fn_MomentCours(p.isin, j);
-    if (!(tc > cap.ts) || (s.divisions || []).some(d => d.j > jourCap)) return p;
+    const veille = !(tc > cap.ts) && i > 0 && j <= jourCap && p.cours != null && egal(p.cours, s.clotures[i - 1]) && !egal(p.cours, s.clotures[i]);
+    if (!(tc > cap.ts || veille) || (s.divisions || []).some(d => d.j > jourCap)) return p;
     const t = Fn_TauxAu(fx, s.devise, j), tPrec = i > 0 ? Fn_TauxAu(fx, s.devise, s.jours[i - 1]) : null;
     if (!t) return p;
     const valeur = p.qte * s.clotures[i] / t, cout = p.valeur - (p.plLat || 0);
-    n++; if (tc > moment) moment = tc;
+    n++;
+    if (veille) { nVeille++; jVeille = j; } else if (tc > moment) moment = tc;
     return Object.assign({}, p, { cours: s.clotures[i], valeur, plLat: valeur - cout, plPct: cout > 0 ? (valeur - cout) / cout * 100 : null,
       plJour: tPrec ? valeur - p.qte * s.clotures[i - 1] / tPrec : null, estime: j });
   });
   if (!n) return cap;
+  // Seulement des lignes en retard : le résumé de DEGIRO, lui à jour, reste la valeur des titres du compte.
+  if (!moment) return Object.assign({}, cap, { positions, nbVeille: nVeille, jourVeille: jVeille });
   const titres = positions.reduce((s, p) => s + (p.valeur || 0), 0), cash = cap.marge.cash;
   return Object.assign({}, cap, { positions, marge: Object.assign({}, cap.marge, { titres, vl: cash != null ? titres + cash : null }),
-    estimee: moment, nbEstimees: n, tsValeur: moment });
+    estimee: moment || null, nbEstimees: n - nVeille, tsValeur: moment || cap.ts, nbVeille: nVeille, jourVeille: jVeille });
 }
 function Fn_Derniere() {
   const v = Fn_Compte(), d = Fn_DerniereDegiro(), cb = Fn_DerniereBourso();
@@ -1786,10 +1802,13 @@ function Fn_RendreSynthese(k) {
   let detX = sansReleve;
   if (k.releve) detX = (k.xirr == null ? 'pas assez de mouvements' : 'en euros, depuis le ' + Fmt_Jour(k.premier) + (k.dureeJours < 365 ? ' — moins d’un an : taux annualisé, peu significatif' : ''))
     + (k.horsEuro.length ? ' · ⚠ ' + k.horsEuro.length + ' versement(s) ou retrait(s) en devise non compté(s) : taux faussé' : '');
-  $('v-synthese').innerHTML = '<div class="carte"><div class="heros-lib">' + (v === 'DB' ? 'Valeur nette des deux comptes' : v === 'B' ? 'Valeur nette du compte Bourso' : 'Valeur nette du compte')
+  const badges = (v !== 'B' ? '<span class="courtier courtier-d">DEGIRO</span>' : '') + (v !== 'D' ? '<span class="courtier courtier-b">Bourso</span>' : '');
+  $('v-synthese').innerHTML = '<div class="carte"><div class="heros-lib">' + badges + (v === 'DB' ? 'Valeur nette des deux comptes' : v === 'B' ? 'Valeur nette du compte Bourso' : 'Valeur nette du compte')
     + '</div><div class="heros">' + Fmt_Eur(k.vl) + '</div>'
+    + '<div class="rang" style="align-items:center;margin:0 0 8px"><button id="b-maj-cours">Mettre à jour les cours</button><span class="muet" id="maj-cours-etat">' + Fn_Esc(Var_MajCours) + '</span></div>'
     // Valeur revalorisée au cours de clôture (capture plus ancienne), ou opérations connues depuis la capture.
     + (k.c.estimee ? '<div class="muet">Estimée au ' + Fn_LibCours(k.c.estimee) + ' : pas de capture depuis. Si tu as acheté, vendu ou versé depuis, refais une capture.</div>' : '')
+    + (k.c.nbVeille ? '<div class="muet">DEGIRO affichait encore le cours de la séance précédente sur ' + k.c.nbVeille + ' ligne(s) : Smart prend la clôture du ' + Fmt_Jour(k.c.jourVeille) + '.</div>' : '')
     + (k.c.opsDepuis ? '<div class="note note-warn">Des opérations ont eu lieu depuis la dernière capture : positions et valeur ne sont plus à jour. Refais une capture.</div>' : '')
     + '<div class="tuiles">'
     + tuile('Valeur des titres', Fmt_Eur(k.titres), k.c.positions.length + ' lignes')
@@ -1802,6 +1821,23 @@ function Fn_RendreSynthese(k) {
         + (k.divApprox ? ' · devises converties au taux du relevé' : ''), Cls_Signe(k.dividendes))
       + tuile('Frais payés', (k.fraisApprox ? '≈ ' : '') + Fmt_Eur(-k.frais || 0),'courtage, connexion, change, taxes' + (k.fraisApprox ? ' · devises converties au taux du relevé' : '')) : '')
     + '</div></div>';
+  $('b-maj-cours').onclick = Fn_LancerCours;
+}
+/* BOUTON « METTRE À JOUR LES COURS » : seul le téléphone obtient les cours de Yahoo. La page appelle le serveur HTTP de MacroDroid sur
+   ce même téléphone (127.0.0.1:8080/smart_cours, déclencheur de la macro « Smart - cours ») ; la macro dépose les cours, le robot les
+   range, et la page les recharge d'elle-même (Fn_SuivreCours). Ailleurs (autre téléphone, PC), rien ne répond : le widget Smart-Cours. */
+let Var_MajCours = '';
+async function Fn_LancerCours() {
+  const dire = m => { Var_MajCours = m; if ($('maj-cours-etat')) $('maj-cours-etat').textContent = m; };
+  dire('Lancement…');
+  const ctl = new AbortController(), minuteur = setTimeout(() => ctl.abort(), 8000);
+  try {
+    await fetch('http://127.0.0.1:8080/smart_cours', { mode: 'no-cors', cache: 'no-store', signal: ctl.signal });
+    dire('Macro « Smart - cours » lancée : les nouveaux cours arrivent dans 5 minutes environ, la page se met à jour toute seule.');
+  } catch (e) {
+    dire(e.name === 'AbortError' ? 'Demande envoyée sans réponse du téléphone : si rien ne change d’ici 10 minutes, appuie sur le widget Smart-Cours.'
+      : 'Pas de réponse de MacroDroid : ce bouton ne marche que sur le téléphone de la macro (serveur HTTP de MacroDroid activé). Sinon, appuie sur le widget Smart-Cours.');
+  } finally { clearTimeout(minuteur); }
 }
 
 /* ---------- diagrammes (SVG à la main, sans bibliothèque) ---------- */
@@ -2085,7 +2121,10 @@ function Fn_HtmlAnciensNoms(p) {
 
 /* ---------- relevé ---------- */
 function Fn_RendreReleve() {
-  const mv = Fn_MouvementsDegiro();   // l'onglet Relevé montre le relevé DEGIRO, quel que soit le compte affiché
+  // Une carte par courtier, celle du compte choisi en haut (les deux pour « Les deux », ou tant qu'il n'y a pas de capture Bourso).
+  const vc = Fn_DerniereBourso() ? Fn_Compte() : 'DB';
+  $('c-releve').classList.toggle('cache', vc === 'B'); $('c-releve-bourso').classList.toggle('cache', vc === 'D');
+  const mv = Fn_MouvementsDegiro();
   if (!mv.length) { $('releve-etat').innerHTML = '<div class="note note-warn">Aucun relevé importé : XIRR, versements, dividendes et frais restent vides.</div>'; return; }
   const b = Fn_Bilan(mv, Var_Etat.corrections, Fn_Taux(mv, Var_Etat.corrections));
   const { horsEuro } = Fn_Flux(mv, Var_Etat.corrections);
@@ -2159,11 +2198,14 @@ function Fn_Avertissements() {
         + ', le téléphone a rapporté ' + tel.ok + ' cours.' : ''),
       'Rien : c’est une information.', null);
     const lignes = Fn_LignesMemo();
-    const vrais = (idx.introuvables || []).filter(x => !(lignes[x.isin] && lignes[x.isin].etats.every(e => !e.qte)));   // aller-retour dans la journée : pas besoin de cours
+    // Une action déclarée « ignorée » (lien ci-dessous) n'est plus signalée ; taper son symbole dans Réglages → Cours la fait revenir.
+    const ignores = new Set(Var_Etat.coursIgnores || []);
+    const vrais = (idx.introuvables || []).filter(x => !(lignes[x.isin] && lignes[x.isin].etats.every(e => !e.qte)) && !ignores.has(x.isin));   // aller-retour dans la journée : pas besoin de cours
     if (vrais.length) ajout('warn', 'Cours', vrais.length + ' action(s) introuvable(s) chez Yahoo : ' + vrais.map(x => Fn_Esc(x.nom || x.isin)).join(', '),
       'Le robot cherche chaque action chez Yahoo à partir de son ISIN, et n’a trouvé aucun symbole qui lui corresponde (nom ou devise différents) — souvent une société '
       + 'radiée ou rachetée. Sans cours, la valeur de ces actions dans l’historique est estimée au prix de ta dernière opération.',
-      'Si tu connais leur symbole chez Yahoo (par exemple « ALO.PA »), tape-le dans Réglages → Cours. Sinon, rien : seul l’historique est un peu moins précis.', 'reglages');
+      'Si tu connais leur symbole chez Yahoo (par exemple « ALO.PA »), tape-le dans Réglages → Cours. Sinon, rien : seul l’historique est un peu moins précis. '
+      + '<a href="#" data-ignorer="' + vrais.map(x => Fn_Esc(x.isin)).join(',') + '">Ne plus les signaler</a> ·', 'reglages');
     if (idx.alerte) ajout('info', 'Cours', 'Actions en cours d’identification chez Yahoo',
       'Le robot a reçu des actions nouvelles pour lui (par exemple tes actions Bourso) et ne connaît pas encore leur symbole Yahoo. Chaque soir, il en essaie un à trois par action, '
       + 'jusqu’à trouver le bon. En attendant, leurs courbes sont estimées (pointillés). Message du robot : « ' + Fn_Esc(idx.alerte) + ' »',
@@ -2175,7 +2217,12 @@ function Fn_Avertissements() {
   }
   // Captures.
   const cd = Fn_DerniereDegiro(), cb = Fn_DerniereBourso();
-  if (cd) { const a = Fn_Alertes(cd); if (a.length) ajout('warn', 'Captures', 'Capture DEGIRO du ' + Fn_Esc(Fmt_DateHeure(cd.ts)) + ' à vérifier',
+  // Écart dû aux lignes en retard de DEGIRO (voir Fn_Revaloriser) : expliqué et corrigé, ce n'est plus une capture à refaire.
+  const dv = cd && Fn_Revaloriser(cd, Fn_MouvementsDegiro()), veille = dv && dv.nbVeille;
+  if (veille) ajout('info', 'Captures', 'Capture DEGIRO du ' + Fn_Esc(Fmt_DateHeure(cd.ts)) + ' : ' + veille + ' ligne(s) au cours de la séance précédente',
+    'À l’heure de la capture, l’appli DEGIRO montrait encore sur ces lignes le cours et le change de la séance d’avant ; son résumé, lui, était à jour, d’où l’écart entre les deux. '
+    + 'Smart remplace ces cours par la clôture du ' + Fmt_Jour(dv.jourVeille) + ' (Yahoo, change BCE).', 'Rien.', null);
+  if (cd) { const a = Fn_Alertes(cd).filter(x => !(veille && /^somme des lignes/.test(x))); if (a.length) ajout('warn', 'Captures', 'Capture DEGIRO du ' + Fn_Esc(Fmt_DateHeure(cd.ts)) + ' à vérifier',
     'La capture lue ne tombe pas tout à fait juste : ' + Fn_Esc(a.join(' ; ')) + '. Le plus souvent, l’appli DEGIRO n’avait pas encore rafraîchi toutes ses lignes au moment de la lecture.',
     'Refais une capture DEGIRO (widget Smart-Portefeuille), de préférence quand l’appli est ouverte depuis quelques secondes.', 'accueil'); }
   if (cb && !Fn_BoursoComplete(cb)) ajout('warn', 'Captures', 'Capture Bourso du ' + Fn_Esc(Fmt_DateHeure(cb.ts)) + ' incomplète',
@@ -2211,6 +2258,8 @@ function Fn_RendreAlertes() {
       + '<div style="margin-top:4px"><b>Ce que ça veut dire :</b> ' + x.sens + '</div>'
       + '<div style="margin-top:4px"><b>Que faire :</b> ' + x.faire + (x.onglet ? ' <a href="#" data-aller="' + x.onglet + '">Ouvrir ' + noms[x.onglet] + '</a>' : '') + '</div></div>').join('');
   $('t-alertes').querySelectorAll('[data-aller]').forEach(l => { l.onclick = e => { e.preventDefault(); Fn_Onglet(l.dataset.aller); }; });
+  $('t-alertes').querySelectorAll('[data-ignorer]').forEach(l => { l.onclick = e => { e.preventDefault();
+    Var_Etat.coursIgnores = [...new Set((Var_Etat.coursIgnores || []).concat(l.dataset.ignorer.split(',')))]; Fn_Sauver(); Fn_Rendre(); }; });
 }
 /* CHOIX DU COMPTE, en haut de la page (dès qu'une capture Bourso existe) : DEGIRO · Bourso · Les deux. Il vaut pour tous
    les onglets ; il est gardé. Tant que l'historique Bourso manque, une ligne dit ce qui ne compte encore que DEGIRO. */
@@ -3122,7 +3171,9 @@ function Fn_GraphePerformance(hist) {
   const duree = (Fn_JourUtc(jours[m]) - Fn_JourUtc(jours[0])) / 86400000;
   const tuile = (lib, val, cls, det) => '<div class="tuile"><div class="lib">' + lib + '</div><div class="val ' + (cls || '') + '" style="font-size:16px">' + val + '</div>'
     + (det ? '<div class="muet" style="font-size:11.5px">' + det + '</div>' : '') + '</div>';
-  $('perf-tuiles').innerHTML = tuile('Performance', Fmt_Pct(p.pct[m], 1, true), Cls_Signe(p.pct[m]), 'hors versements')
+  const twrAn = duree >= 365 ? (Math.pow(1 + p.pct[m] / 100, 365 / duree) - 1) * 100 : null;
+  $('perf-tuiles').innerHTML = tuile('Rendement TWR', Fmt_Pct(p.pct[m], 1, true), Cls_Signe(p.pct[m]), 'sur la période, hors versements')
+    + tuile('TWR annualisé', twrAn != null ? Fmt_Pct(twrAn, 1, true) + ' / an' : '—', twrAn != null ? Cls_Signe(twrAn) : '', twrAn != null ? 'par an en moyenne' : 'sur un an ou plus seulement')
     + tuile('Gain', Fmt_Signe(p.eur[m]), Cls_Signe(p.eur[m]), 'versé sur la période : ' + Fmt_Eur(p.verse))
     + tuile('XIRR', duree >= 365 && p.xirr != null ? Fmt_Pct(p.xirr * 100, 1, true) + ' / an' : '—', duree >= 365 ? Cls_Signe(p.xirr) : '',
       duree >= 365 ? 'rendement annuel' : 'sur un an ou plus seulement');
@@ -3190,7 +3241,8 @@ function Fn_TableauSymboles(idx) {
     const s = series.get(t.isin), f = Var_Cours.series[t.isin] || {}, l = lignes[t.isin], impose = (Var_Etat.corrSymboles || {})[t.isin] || '';
     const etat = s ? '<b>' + Fn_Esc(s.symbole) + '</b><div class="muet">' + Fn_Esc(f.nom || '') + (f.place ? ' · ' + Fn_Esc(f.place) : '') + ' · ' + s.nb + ' j</div>'
       : l && l.etats.every(e => !e.qte) ? '<span class="muet">acheté et revendu le même jour : aucun cours nécessaire</span>'
-      : introuvables.has(t.isin) ? '<span class="neg">introuvable</span>' : '<span class="muet">pas encore trouvé : essai le soir</span>';
+      : introuvables.has(t.isin) ? ((Var_Etat.coursIgnores || []).includes(t.isin) ? '<span class="muet">introuvable · ignorée</span>' : '<span class="neg">introuvable</span>')
+      : '<span class="muet">pas encore trouvé : essai le soir</span>';
     return '<tr><td>' + Fn_Esc(t.nom) + '<div class="muet">' + (t.ticker ? Fn_Esc(t.ticker) + ' · ' : '') + Fn_Esc(t.isin) + (t.detenu ? '' : ' · vendu') + '</div></td>'
       + '<td>' + etat + '</td><td><input type="text" data-corr="' + Fn_Esc(t.isin) + '" placeholder="' + Fn_Esc(s ? s.symbole : 'symbole') + '" value="' + Fn_Esc(impose)
       + '" autocapitalize="characters" style="width:72px"></td></tr>';
@@ -3221,7 +3273,8 @@ function Fn_RendreReglagesCours() {
   if ($('b-jeton-effacer')) $('b-jeton-effacer').onclick = () => { Ecrire_Local(Cst_CleJeton, ''); Fn_RendreCours(); };
   $('b-cours-maj').onclick = () => Fn_ChargerCours(true);
   if ($('b-corr')) $('b-corr').onclick = () => {
-    document.querySelectorAll('#r-cours [data-corr]').forEach(i => { const v = i.value.trim().toUpperCase(); if (v) Var_Etat.corrSymboles[i.dataset.corr] = v; else delete Var_Etat.corrSymboles[i.dataset.corr]; });
+    document.querySelectorAll('#r-cours [data-corr]').forEach(i => { const v = i.value.trim().toUpperCase(); if (v) Var_Etat.corrSymboles[i.dataset.corr] = v; else delete Var_Etat.corrSymboles[i.dataset.corr];
+      if (v && Var_Etat.corrSymboles[i.dataset.corr] !== (i.defaultValue || '').trim().toUpperCase()) Var_Etat.coursIgnores = (Var_Etat.coursIgnores || []).filter(x => x !== i.dataset.corr); });   // nouveau symbole : de nouveau signalée si introuvable
     Fn_Sauver(); Fn_ChargerCours(true);
   };
 }
