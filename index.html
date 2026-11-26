@@ -44,7 +44,17 @@ h2 { font-size: 16px; margin: 0 0 4px; }
 .sous { color: var(--encre-2); font-size: 13px; }
 .muet { color: var(--muet); font-size: 12.5px; }
 .calcul { margin: 8px 0 4px; padding-left: 18px; } .calcul li { margin: 2px 0; }
-.carte { background: var(--surface); border: 1px solid var(--bord); border-radius: 12px; padding: 14px; margin: 12px 0; }
+.carte { background: var(--surface); border: 1px solid var(--bord); border-radius: 12px; padding: 14px; margin: 12px 0; position: relative; }
+/* AIDE REPLIÉE (demande de l'utilisateur, 26/11/2026) : dans chaque carte, les textes gris d'explication et les encadrés verts et
+   jaunes ne s'affichent qu'après un appui sur « ? » (en haut à droite). Les alertes rouges restent visibles, et l'onglet ⚠ garde
+   ses encadrés. Restent aussi visibles : l'état du bouton des cours, le compteur du Détail, l'état de la copie GitHub. */
+.aide { position: absolute; top: 10px; right: 10px; width: 28px; height: 28px; padding: 0; border-radius: 50%; border: 1px solid var(--bord);
+  background: var(--surface-2); color: var(--encre-2); font-weight: 700; font-size: 14px; line-height: 26px; text-align: center; cursor: pointer; z-index: 1; }
+.aide[aria-expanded="true"] { background: var(--serie-1); color: #fff; border-color: var(--serie-1); }
+.carte:has(> .aide) > h2:first-of-type { padding-right: 36px; }
+.carte:not(.aide-ouverte) > div.muet:not(#sync-etat), .carte:not(.aide-ouverte) > div > div.muet,
+.carte:not(.aide-ouverte) > ul.muet, .carte:not(.aide-ouverte) > ol.muet, .carte:not(.aide-ouverte) > div > ul.muet, .carte:not(.aide-ouverte) > div > ol.muet,
+.carte:not(.aide-ouverte):not(#c-alertes) .note-ok, .carte:not(.aide-ouverte):not(#c-alertes) .note-warn { display: none; }
 .heros-lib { color: var(--encre-2); font-size: 13px; }
 .heros { font-size: 48px; font-weight: 600; line-height: 1.1; margin: 2px 0 10px; }
 .tuiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
@@ -1677,7 +1687,10 @@ function Fn_RendreReleveBourso() {
     + 'Tape-le (il se trouve sur le site de Bourso ou de l’émetteur), pour que leurs cours comptent dans l’historique :'
     + h.sansIsin.map(nom => '<div class="rang"><label style="flex:1">' + Fn_Esc(nom) + '</label><input type="text" maxlength="12" size="14" data-isin-b="' + Fn_Esc(nom)
       + '" placeholder="FR0000000000"></div>').join('') + '<div class="rang"><button id="b-isins-b">Enregistrer les ISIN</button></div></div>';
+  // Bilan de l'historique Bourso, comme celui du relevé DEGIRO (mêmes types, mêmes libellés corrigeables).
+  if (h.mouvements.length) html += Fn_HtmlBilanReleve(Fn_Bilan(h.mouvements, Var_Etat.corrections, Fn_Taux(h.mouvements, Var_Etat.corrections)), false);
   $('releve-bourso-etat').innerHTML = html;
+  Fn_BrancherLibelles('releve-bourso-etat');
   if ($('b-isins-b')) $('b-isins-b').onclick = () => {
     const rr = Fn_ReleveBourso(); let k = 0;
     document.querySelectorAll('[data-isin-b]').forEach(i => { const v = i.value.trim().toUpperCase(); if (/^[A-Z]{2}[A-Z0-9]{9}\d$/.test(v)) { rr.isins[i.dataset.isinB] = v; k++; } });
@@ -1687,17 +1700,25 @@ function Fn_RendreReleveBourso() {
 function Fn_DerniereBourso() { const c = ((Var_Etat.bourso || {}).captures || []); return c.length ? c[c.length - 1] : null; }
 const Fn_BoursoComplete = c => c && c.controle && c.controle.ecart != null && Math.abs(c.controle.ecart) <= Math.max(1, (c.titres || 0) * 0.0005);
 function Fn_BilanBourso(r, ajout) {
-  if (!r.ok) { Fn_NoteReception('crit', '<b>Capture Bourso non intégrée.</b> ' + Fn_Esc(r.message), ajout); return; }
+  if (!r.ok) { Fn_NoteReception('crit', '<b>Capture Bourso non intégrée.</b> ' + Fn_Esc(r.message), ajout, 'B'); return; }
   const c = r.cap, k = c.controle, complet = Fn_BoursoComplete(c);
   Fn_NoteReception(complet ? 'ok' : 'warn', '<b>Capture Bourso du ' + Fn_Esc(Fmt_DateHeure(c.ts)) + ' intégrée</b> — ' + c.positions.length + ' ligne(s)'
-    + (complet ? ', somme des lignes = évaluation des titres. Tes lignes Bourso sont dans les positions : choisis « Bourso » ou « Les deux » en haut de la page.'
+    + (complet ? ', somme des lignes = évaluation des titres.'
       : k.ecran == null ? '. L’évaluation des titres n’a pas été lue (le haut du compte-titres n’était pas à l’écran) : impossible de vérifier qu’il ne manque pas de ligne.'
       : '. <b>Il manque des lignes</b> : somme ' + Fn_Esc(Fmt_Eur(k.somme, 2)) + ' pour ' + Fn_Esc(Fmt_Eur(k.ecran, 2)) + ' à l’écran. Relance la capture et, '
         + 'pendant les 5 secondes de lecture, fais glisser la liste jusqu’à la dernière ligne.')
-    + (r.lus ? ' ' + r.lus + ' mouvement(s) lu(s), dont ' + r.nouveaux + ' nouveau(x).' : ''), ajout);
+    + (r.lus ? ' ' + r.lus + ' mouvement(s) lu(s), dont ' + r.nouveaux + ' nouveau(x).' : ''), ajout, 'B');
 }
 // ajout : la note s'ajoute à la précédente (capture DEGIRO puis Bourso) au lieu de la remplacer.
-function Fn_NoteReception(type, html, ajout) { $('reception').innerHTML = (ajout ? $('reception').innerHTML : '') + '<div class="note note-' + type + '">' + html + '</div>'; }
+// courtier « D » ou « B » : la note ne s'affiche que si ce compte est choisi en haut (ou « Les deux ») — voir Fn_FiltrerNotes.
+function Fn_NoteReception(type, html, ajout, courtier) {
+  $('reception').innerHTML = (ajout ? $('reception').innerHTML : '') + '<div class="note note-' + type + '"' + (courtier ? ' data-courtier="' + courtier + '"' : '') + '>' + html + '</div>';
+  Fn_FiltrerNotes();
+}
+function Fn_FiltrerNotes() {
+  const v = Fn_DerniereBourso() ? Fn_Compte() : 'DB';
+  document.querySelectorAll('#reception [data-courtier]').forEach(n => n.classList.toggle('cache', v !== 'DB' && n.dataset.courtier !== v));
+}
 function Fn_Alertes(c) {
   const k = c.controle, out = [];
   if (k.attendues != null && k.attendues !== k.lues) out.push(k.lues + ' ligne(s) lue(s) sur ' + k.attendues + ' livrées par la macro');
@@ -1709,12 +1730,12 @@ function Fn_Alertes(c) {
   return out;
 }
 function Fn_BilanReception(r, ajout) {
-  if (!r.ok) { Fn_NoteReception('crit', '<b>Capture DEGIRO non intégrée.</b> ' + Fn_Esc(r.message), ajout); return; }
+  if (!r.ok) { Fn_NoteReception('crit', '<b>Capture DEGIRO non intégrée.</b> ' + Fn_Esc(r.message), ajout, 'D'); return; }
   const a = Fn_Alertes(r.cap);
   const v = Fn_VersementsProbables(Var_Etat.captures, Fn_MouvementsDegiro(), Var_Etat.corrections).filter(x => x.au === Fn_Jour(r.cap.ts));
   Fn_NoteReception(a.length || v.length ? 'warn' : 'ok', '<b>Capture DEGIRO du ' + Fn_Esc(Fmt_DateHeure(r.cap.ts)) + ' intégrée</b> — ' + r.cap.controle.lues + ' position(s)'
     + (a.length ? '. À vérifier : ' + Fn_Esc(a.join(' ; ')) + '.' : ', somme des lignes = valeur des titres de l’écran.')
-    + v.map(x => '<br>' + Fn_HtmlVersement(x)).join(''), ajout);
+    + v.map(x => '<br>' + Fn_HtmlVersement(x)).join(''), ajout, 'D');
 }
 // Versement ou retrait deviné entre deux captures (voir Fn_VersementsProbables).
 function Fn_HtmlVersement(v) {
@@ -1734,7 +1755,7 @@ async function Fn_ReceptionAuto() {
     const t = await navigator.clipboard.readText();
     if (releve && !/===VIGIE:META===|===SMART-BOURSO/.test(t)) {
       const b = Fn_ImporterReleve(t, 'relevé de l’appli DEGIRO');
-      Fn_Sauver(); Fn_NoteReception(b.ok ? 'ok' : 'warn', 'Relevé reçu — ' + b.texte); Fn_Rendre();
+      Fn_Sauver(); Fn_NoteReception(b.ok ? 'ok' : 'warn', 'Relevé DEGIRO reçu — ' + b.texte, false, 'D'); Fn_Rendre();
       return;
     }
     // Capture DEGIRO, Bourso, ou les deux à la suite (macro unique) : l'heure retenue est celle de la partie la plus récente.
@@ -2129,11 +2150,6 @@ function Fn_RendreReleve() {
   const b = Fn_Bilan(mv, Var_Etat.corrections, Fn_Taux(mv, Var_Etat.corrections));
   const { horsEuro } = Fn_Flux(mv, Var_Etat.corrections);
   const imp = Var_Etat.releve.imports || [];
-  const montants = dv => Object.keys(dv).sort((x, y) => x === 'EUR' ? -1 : y === 'EUR' ? 1 : x < y ? -1 : 1).map(d => Fmt_Dev(dv[d], d)).join('<br>');
-  const ordre = ['versement', 'retrait', 'dividende', 'impot', 'frais_courtage', 'frais_connexion', 'frais_change', 'taxe', 'frais', 'interet', 'achat', 'vente', 'operation_titres', 'regularisation', 'change', 'interne', 'autre'];
-  // En euros : sans objet pour le change et les transferts internes, qui se compensent d'une ligne à l'autre.
-  const enEuros = t => (t === 'change' || t === 'interne') ? '—'
-    : (b.parType[t].approx || b.parType[t].sansTaux ? '≈ ' : '') + Fmt_Eur(b.parType[t].eur, 2) + (b.parType[t].sansTaux ? ' <span class="muet">(' + b.parType[t].sansTaux + ' sans taux)</span>' : '');
   const derniere = Fn_Derniere();
   const vieux = derniere && imp.length && Fn_Jour(imp[imp.length - 1].ts) < Fn_Jour(derniere.ts);
   $('releve-etat').innerHTML = '<div class="note note-ok">' + mv.length + ' mouvements, du ' + Fmt_Jour(b.du) + ' au ' + Fmt_Jour(b.au)
@@ -2141,20 +2157,34 @@ function Fn_RendreReleve() {
     + (vieux ? '<div class="muet">Si vous avez versé ou retiré de l’argent depuis le ' + Fmt_Date(imp[imp.length - 1].ts) + ', importez un relevé récent : sinon le XIRR et le gain total n’en tiennent pas compte.</div>' : '')
     + (horsEuro.length ? '<div class="note note-warn">' + horsEuro.length + ' versement(s) ou retrait(s) dans une autre devise que l’euro ne sont pas comptés dans le XIRR.</div>' : '')
     + Fn_VersementsProbables(Var_Etat.captures, mv, Var_Etat.corrections).map(v => '<div class="note note-warn">' + Fn_HtmlVersement(v) + '</div>').join('')
-    + '<h2 style="margin-top:10px">Bilan du compte</h2><div class="defile"><table><thead><tr><th>Type</th><th>Nb</th><th>Montant</th><th>En euros</th></tr></thead><tbody>'
+    + Fn_HtmlBilanReleve(b, true);
+  Fn_BrancherLibelles('releve-etat');
+}
+/* BILAN D'UN RELEVÉ (DEGIRO, ou historique Bourso converti au même format) : totaux par type, puis libellés et leur classement,
+   corrigeable. degiro : ajoute l'explication des devises et des transferts internes (le compte Bourso est tout en euros). */
+function Fn_HtmlBilanReleve(b, degiro) {
+  const montants = dv => Object.keys(dv).sort((x, y) => x === 'EUR' ? -1 : y === 'EUR' ? 1 : x < y ? -1 : 1).map(d => Fmt_Dev(dv[d], d)).join('<br>');
+  const ordre = ['versement', 'retrait', 'dividende', 'impot', 'frais_courtage', 'frais_connexion', 'frais_change', 'taxe', 'frais', 'interet', 'achat', 'vente', 'operation_titres', 'regularisation', 'change', 'interne', 'autre'];
+  // En euros : sans objet pour le change et les transferts internes, qui se compensent d'une ligne à l'autre.
+  const enEuros = t => (t === 'change' || t === 'interne') ? '—'
+    : (b.parType[t].approx || b.parType[t].sansTaux ? '≈ ' : '') + Fmt_Eur(b.parType[t].eur, 2) + (b.parType[t].sansTaux ? ' <span class="muet">(' + b.parType[t].sansTaux + ' sans taux)</span>' : '');
+  return '<h2 style="margin-top:10px">Bilan du compte</h2><div class="defile"><table><thead><tr><th>Type</th><th>Nb</th><th>Montant</th><th>En euros</th></tr></thead><tbody>'
     + ordre.filter(t => b.parType[t]).map(t => '<tr><td>' + Fn_Esc(Cst_Types[t]) + '</td><td>' + b.parType[t].nb + '</td><td>' + montants(b.parType[t].devises) + '</td><td>' + enEuros(t) + '</td></tr>').join('')
-    + '</tbody></table></div><div class="muet">« En euros » : un montant en devise est converti au taux de l’opération de change du relevé la plus proche '
-    + '(« ≈ » quand elle n’a pas eu lieu le même jour) — jamais à un taux extérieur. Les opérations de change et les transferts internes '
-    + '(compte espèces flatex, fonds monétaire, réservations) se compensent d’une ligne à l’autre. Le XIRR, lui, n’utilise que des euros : '
-    + 'versements, retraits et valeur du compte.</div>'
+    + '</tbody></table></div>'
+    + (degiro ? '<div class="muet">« En euros » : un montant en devise est converti au taux de l’opération de change du relevé la plus proche '
+      + '(« ≈ » quand elle n’a pas eu lieu le même jour) — jamais à un taux extérieur. Les opérations de change et les transferts internes '
+      + '(compte espèces flatex, fonds monétaire, réservations) se compensent d’une ligne à l’autre. Le XIRR, lui, n’utilise que des euros : '
+      + 'versements, retraits et valeur du compte.</div>' : '')
     + '<details><summary>Libellés du relevé et leur classement (à vérifier une fois)</summary><div class="defile"><table><thead><tr><th>Libellé</th><th>Classé en</th><th>Nb</th><th>Montant</th></tr></thead><tbody>'
     + b.libelles.map(x => '<tr><td>' + Fn_Esc(x.libelle) + '</td><td>' + (x.corrigeable
       ? '<select data-libelle="' + Fn_Esc(x.libelle) + '">' + Object.keys(Cst_Types).map(t => '<option value="' + t + '"' + (t === x.type ? ' selected' : '') + '>' + Fn_Esc(Cst_Types[t]) + '</option>').join('') + '</select>'
         + (Var_Etat.corrections[x.libelle] ? ' <span class="muet">corrigé</span>' : '')
       : Fn_Esc(Cst_Types[x.type])) + '</td><td>' + x.nb + '</td><td>' + montants(x.devises) + '</td></tr>').join('')
     + '</tbody></table></div><div class="muet">Seuls « Versement » et « Retrait » entrent dans le XIRR. Si un libellé est mal classé, changez-le ici : la correction vaut pour tous les mouvements de ce libellé.</div></details>';
-  document.querySelectorAll('#releve-etat select[data-libelle]').forEach(s => s.onchange = () => {
-    Var_Etat.corrections[s.dataset.libelle] = s.value; Fn_Sauver(); Fn_Rendre();
+}
+function Fn_BrancherLibelles(id) {
+  document.querySelectorAll('#' + id + ' select[data-libelle]').forEach(s => s.onchange = () => {
+    Var_Etat.corrections[s.dataset.libelle] = s.value; Var_Memo = {}; Fn_Sauver(); Fn_Rendre();
   });
 }
 
@@ -2168,6 +2198,7 @@ function Fn_Rendre() {
   if (c) { Fn_RendreIndicateurs(k); Fn_GrapheEvolution(k); Fn_GrapheRepartition(c); Fn_GraphePlusValues(c); Fn_RendreEcarts(c); Fn_RendreTableau(c); }
   else $('c-ecarts').classList.add('cache');
   Fn_RendreCompte();
+  Fn_FiltrerNotes();
   Fn_RendreAlertes();
   Fn_RendreCours();
   if (c) Fn_RendreAnalyse();
@@ -2326,7 +2357,7 @@ $('f-releve').onchange = async e => {
   const bilans = [];
   for (const f of e.target.files) bilans.push(Fn_ImporterReleve(await lireFichier(f), f.name));
   Fn_Sauver();
-  Fn_NoteReception(bilans.every(b => b.ok) ? 'ok' : 'warn', 'Relevé — ' + bilans.map(b => b.texte).join('<br>'));
+  Fn_NoteReception(bilans.every(b => b.ok) ? 'ok' : 'warn', 'Relevé DEGIRO — ' + bilans.map(b => b.texte).join('<br>'), false, 'D');
   e.target.value = ''; Fn_Rendre(); window.scrollTo(0, 0);
 };
 $('b-sauver').onclick = () => {
@@ -3812,6 +3843,31 @@ async function Fn_SuivreCours() {
 }
 document.addEventListener('visibilitychange', Fn_SuivreCours);
 setInterval(Fn_SuivreCours, 120000);
+
+/* AIDE REPLIÉE : un « ? » en haut à droite de chaque carte qui a des explications (textes gris) ou des encadrés verts et jaunes ;
+   il les montre ou les cache (CSS « aide-ouverte »). Les cartes se redessinent souvent : un observateur repose les boutons, et
+   l'état ouvert est gardé par carte (Var_Aides) le temps de la visite. */
+const Cst_SelAide = ':scope > div.muet:not(#sync-etat), :scope > div > div.muet, :scope > ul.muet, :scope > ol.muet, :scope > div > ul.muet, :scope > div > ol.muet';
+const Var_Aides = new Set();
+function Fn_BoutonsAide() {
+  document.querySelectorAll('main .carte').forEach((c, k) => {
+    const cle = c.id || (c.parentNode && c.parentNode.id) || 'carte' + k;
+    const utile = c.querySelector(Cst_SelAide + (c.id === 'c-alertes' ? '' : ', :scope .note-ok, :scope .note-warn')) != null;
+    let b = c.querySelector(':scope > .aide');
+    if (!utile) { if (b) b.remove(); c.classList.remove('aide-ouverte'); return; }
+    if (!b) {
+      b = document.createElement('button'); b.type = 'button'; b.className = 'aide'; b.textContent = '?'; b.title = 'Explications';
+      b.setAttribute('aria-label', 'Afficher ou cacher les explications');
+      b.onclick = () => { if (Var_Aides.has(cle)) Var_Aides.delete(cle); else Var_Aides.add(cle); Fn_BoutonsAide(); };
+      c.insertBefore(b, c.firstChild);
+    }
+    const ouvert = Var_Aides.has(cle);
+    c.classList.toggle('aide-ouverte', ouvert); b.setAttribute('aria-expanded', String(ouvert));
+  });
+}
+let Var_AideImage = null;
+new MutationObserver(() => { if (Var_AideImage == null) Var_AideImage = requestAnimationFrame(() => { Var_AideImage = null; Fn_BoutonsAide(); }); })
+  .observe(document.querySelector('main'), { childList: true, subtree: true });
 
 Fn_Theme(); Fn_Onglet('accueil'); Fn_ReceptionAuto(); Fn_ChargerCours(false); Fn_SuivreAnalyseRobot(); Fn_SuivreAnalysesTitres();
 </script>
