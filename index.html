@@ -179,6 +179,13 @@ table.gauche-1 th:first-child, table.gauche-1 td:first-child { text-align: left;
 
   <section id="v-synthese" data-onglet="accueil"></section>
 
+  <section class="carte cache" id="c-marches" data-onglet="accueil">
+    <h2>Marchés du jour</h2>
+    <div class="muet">Variation de la dernière séance des grands indices : clôture Yahoo comparée à celle de la séance d’avant, déposée chaque soir par le
+      téléphone avec les cours de tes actions. MSCI World : le fonds iShares coté à Amsterdam, en euros.</div>
+    <div class="defile" id="t-marches"></div>
+  </section>
+
 
   <section class="carte" id="c-indicateurs" data-onglet="accueil">
     <h2>Indicateurs</h2>
@@ -235,6 +242,16 @@ table.gauche-1 th:first-child, table.gauche-1 td:first-child { text-align: left;
     <h2>Répartition par ligne</h2>
     <div class="muet">Part de chaque titre dans la valeur des titres, de la plus grosse à la plus petite.</div>
     <div class="graphe" id="g-repartition"></div>
+  </section>
+
+  <section class="carte" id="c-devises-pays" data-onglet="accueil">
+    <h2>Répartition par devise et par pays</h2>
+    <div class="muet">Part de la valeur des titres. La devise est celle de la cotation ; le pays, celui de l’ISIN (le pays où le titre est émis, pas
+      toujours celui de son activité : ArcelorMittal est au Luxembourg, un fonds souvent en Irlande).</div>
+    <h2 style="margin-top:10px;font-size:14px">Par devise</h2>
+    <div class="graphe" id="g-devises"></div>
+    <h2 style="margin-top:10px;font-size:14px">Par pays</h2>
+    <div class="graphe" id="g-pays"></div>
   </section>
 
   <section class="carte" id="c-plusvalues" data-onglet="accueil">
@@ -695,7 +712,7 @@ function Fn_MouvementsDepuisBourso(ops, titresHist, isinsManuels, mvtsAppli, cou
   Object.entries(isinsManuels || {}).forEach(([n, i]) => { if (i) isinDe[Fn_NomCourt(n)] = i; });
   const isin = nom => nom ? (isinDe[Fn_NomCourt(nom)] || '') : '';
   const fmtPrix = p => String(Math.round(p * 1e6) / 1e6).replace('.', ',');
-  const out = [], sansIsin = new Set();
+  const out = [], sansIsin = new Set(), sansCoupon = [];   // sansCoupon : dividendes sans leur relevé de dividendes (brut et impôt inconnus)
   const ajout = (date, desc, montant, nom, i, n) => out.push({ date, heure: 'B' + String(n).padStart(4, '0'), produit: nom || '', isin: i || '', desc, fx: null, dev: 'EUR', montant,
     soldeDev: '', solde: null, ordre: '', source: 'bourso', cle: 'bourso|' + date + '|' + desc + '|' + montant });
   let n = 0;
@@ -708,7 +725,7 @@ function Fn_MouvementsDepuisBourso(ops, titresHist, isinsManuels, mvtsAppli, cou
       const c = o.montant > 0 ? couponDe(o) : null;   // avec le relevé de dividendes : brut, puis l'impôt retenu (net − brut)
       if (c) { ajout(o.date, 'Dividende ' + (o.nom || ''), c.brut, o.nom, i || c.isin, n);
         if (Math.abs(c.net - c.brut) >= 0.005) ajout(o.date, 'Impôts sur dividende ' + (o.nom || ''), Math.round((c.net - c.brut) * 100) / 100, o.nom, i || c.isin, n); }
-      else ajout(o.date, 'Dividende ' + (o.nom || ''), o.montant, o.nom, i, n);
+      else { ajout(o.date, 'Dividende ' + (o.nom || ''), o.montant, o.nom, i, n); if (o.montant > 0) sansCoupon.push({ date: o.date, nom: o.nom || '', net: o.montant }); }
     }
     else if (/PRELEVEMENTS? FISCAUX|IMPOT/.test(L)) ajout(o.date, 'Impôts sur dividende ' + (o.nom || ''), o.montant, o.nom, i, n);
     else if (/^REPRISE SOLDE/.test(L)) ajout(o.date, 'Transfert interne : reprise du solde de l’ancien compte (Bourso)', o.montant, '', '', n);
@@ -726,7 +743,13 @@ function Fn_MouvementsDepuisBourso(ops, titresHist, isinsManuels, mvtsAppli, cou
     const nom = m.nom || m.libelle, i = m.isin || isin(m.nom), suffixe = i ? ' (' + i + ')' : '';
     if (m.type === 'achat' && m.qte) ajout(m.date, 'Achat ' + m.qte + ' ' + nom + '@' + fmtPrix(-m.montant / m.qte) + ' EUR' + suffixe, m.montant, nom, i, n);
     else if (m.type === 'vente' && m.qte) ajout(m.date, 'Vente ' + m.qte + ' ' + nom + '@' + fmtPrix((m.montant || 0) / m.qte) + ' EUR' + suffixe, m.montant || 0, nom, i, n);
-    else if (m.type === 'dividende') ajout(m.date, 'Dividende ' + nom, m.montant, nom, i, n);
+    else if (m.type === 'dividende') {
+      // Dividende vu dans l'appli (pas encore sur un relevé espèces) : brut et impôt pris au relevé de dividendes s'il est déjà importé.
+      const c = m.montant > 0 ? couponDe({ montant: m.montant, date: m.date, nom }) : null;
+      if (c) { ajout(m.date, 'Dividende ' + nom, c.brut, nom, i || c.isin, n);
+        if (Math.abs(c.net - c.brut) >= 0.005) ajout(m.date, 'Impôts sur dividende ' + nom, Math.round((c.net - c.brut) * 100) / 100, nom, i || c.isin, n); }
+      else { ajout(m.date, 'Dividende ' + nom, m.montant, nom, i, n); if (m.montant > 0) sansCoupon.push({ date: m.date, nom, net: m.montant }); }
+    }
     else if (m.type === 'versement' || m.type === 'retrait') ajout(m.date, m.montant >= 0 ? 'Versement de fonds (Bourso)' : 'Retrait de fonds (Bourso)', m.montant, '', '', n);
     else if (m.type === 'frais') ajout(m.date, 'Frais Bourso : ' + String(m.libelle).toLowerCase(), m.montant, '', '', n);
   });
@@ -751,7 +774,7 @@ function Fn_MouvementsDepuisBourso(ops, titresHist, isinsManuels, mvtsAppli, cou
   });
   out.forEach(m => { delete m.vu; });
   out.sort((a, b) => (a.date + a.heure) < (b.date + b.heure) ? -1 : (a.date + a.heure) > (b.date + b.heure) ? 1 : 0);
-  return { mouvements: out, sansIsin: [...sansIsin].filter(Boolean) };
+  return { mouvements: out, sansIsin: [...sansIsin].filter(Boolean), sansCoupon };
 }
 /* ISIN DES LIGNES BOURSO : l'appli les nomme autrement que les relevés (« ALPHA ET BETA » / « ALPHA BETA »,
    « GAMMA » / « GAMMA SE »). Une ligne prend l'ISIN d'un titre du relevé (ou d'un mouvement) qui a la
@@ -1622,7 +1645,7 @@ const Fn_ReleveBourso = () => { const b = Var_Etat.bourso = Var_Etat.bourso || {
 // L'historique Bourso au format DEGIRO (voir Fn_MouvementsDepuisBourso), recalculé quand une source change.
 function Fn_HistoBourso() {
   const b = Var_Etat.bourso || {}, r = b.releve;
-  if (!r || !r.especes || !Object.keys(r.especes).length) return { mouvements: [], sansIsin: [], ruptures: [], releves: [] };
+  if (!r || !r.especes || !Object.keys(r.especes).length) return { mouvements: [], sansIsin: [], sansCoupon: [], ruptures: [], releves: [] };
   const cle = [Object.keys(r.especes).length, Object.keys(r.titres).length, Object.keys(r.coupons).length, JSON.stringify(r.isins), (b.mouvements || []).length].join('|');
   if (Var_Memo.histoBoursoCle === cle) return Var_Memo.histoBourso;
   const releves = Object.values(r.especes).sort((x, y) => (x.debut.date || '') < (y.debut.date || '') ? -1 : 1);
@@ -1924,6 +1947,60 @@ function Fn_GrapheRepartition(c) {
   });
 }
 
+/* RÉPARTITION PAR DEVISE ET PAR PAYS (demande de l'utilisateur, 26/11/2026) : mêmes barres que la répartition par ligne.
+   Devise de cotation (pence → livre) ; pays = les deux lettres de l'ISIN (pays d'émission). */
+const Cst_NomsDevises = { EUR: 'Euro', USD: 'Dollar US', CHF: 'Franc suisse', GBP: 'Livre sterling', DKK: 'Couronne danoise', SEK: 'Couronne suédoise',
+  NOK: 'Couronne norvégienne', JPY: 'Yen', CAD: 'Dollar canadien', AUD: 'Dollar australien', HKD: 'Dollar de Hong Kong', PLN: 'Zloty' };
+const Cst_NomsPays = { FR: 'France', US: 'États-Unis', DE: 'Allemagne', NL: 'Pays-Bas', LU: 'Luxembourg', CH: 'Suisse', GB: 'Royaume-Uni', IE: 'Irlande',
+  FI: 'Finlande', IT: 'Italie', ES: 'Espagne', BE: 'Belgique', DK: 'Danemark', SE: 'Suède', NO: 'Norvège', AT: 'Autriche', PT: 'Portugal', JP: 'Japon',
+  CA: 'Canada', KY: 'Îles Caïmans', BM: 'Bermudes', JE: 'Jersey', GG: 'Guernesey', AU: 'Australie', CN: 'Chine', HK: 'Hong Kong', IL: 'Israël', SG: 'Singapour' };
+function Fn_BarresParts(zone, groupes, titre) {
+  zone.innerHTML = '';
+  const total = groupes.reduce((s, g) => s + g.valeur, 0);
+  if (!(total > 0)) return;
+  const rows = groupes.map(g => Object.assign({ part: g.valeur / total * 100 }, g)).sort((a, b) => b.part - a.part);
+  const W = zone.clientWidth, bande = 26, epais = 16, gNom = Math.min(190, W * 0.38), gVal = 52;
+  const H = rows.length * bande + 4, xMax = Math.max(...rows.map(r => r.part));
+  const X = v => gNom + (W - gNom - gVal) * v / xMax;
+  const svg = El('svg', { viewBox: '0 0 ' + W + ' ' + H, height: H, role: 'img', 'aria-label': titre + ' : ' + rows.map(r => r.nom + ' ' + Fmt_Pct(r.part, 1)).join(', ') }, zone);
+  El('line', { x1: gNom, x2: gNom, y1: 0, y2: H, stroke: 'var(--axe)', 'stroke-width': 1 }, svg);
+  const bulle = Fn_Bulle(zone);
+  rows.forEach((r, i) => {
+    const y = i * bande + (bande - epais) / 2;
+    Txt({ x: gNom - 8, y: y + epais / 2 + 4, 'text-anchor': 'end' }, Fn_Tronquer(r.nom, Math.floor((gNom - 10) / 6.6)), svg);
+    El('path', { d: Fn_CheminBarre(gNom, X(r.part), y, epais), fill: 'var(--serie-1)' }, svg);
+    Txt({ x: X(r.part) + 6, y: y + epais / 2 + 4 }, Fmt_Pct(r.part, 1), svg);
+    Fn_Cible(svg, W, i * bande, bande, () => bulle.montrer('<b>' + Fn_Esc(r.nom) + '</b><br>' + Fmt_Eur(r.valeur) + ' · ' + Fmt_Pct(r.part, 1) + ' des titres'
+      + '<br>' + r.lignes.map(Fn_Esc).join(', '), X(r.part), i * bande, (i + 1) * bande), bulle);
+  });
+}
+function Fn_GrapheDevisesPays(c) {
+  const grouper = cle => { const g = {}; c.positions.forEach(p => { const k = cle(p); (g[k] = g[k] || { nom: k, valeur: 0, lignes: [] }).valeur += p.valeur || 0; g[k].lignes.push(p.nomSeul || p.nom); }); return Object.values(g); };
+  Fn_BarresParts($('g-devises'), grouper(p => { const d = p.dev === 'GBX' ? 'GBP' : (p.dev || '?'); return Cst_NomsDevises[d] || d; }), 'Répartition par devise');
+  Fn_BarresParts($('g-pays'), grouper(p => { const i = /^[A-Z]{2}[A-Z0-9]{9}\d$/.test(p.isin || '') ? p.isin.slice(0, 2) : null; return i ? (Cst_NomsPays[i] || i) : 'Pays inconnu (sans ISIN)'; }), 'Répartition par pays');
+}
+/* MARCHÉS DU JOUR (demande de l'utilisateur, 26/11/2026) : variation de la dernière séance de chaque grand indice, d'après les
+   séries « IDX- » que le robot range avec les cours (téléphone, chaque soir). Un indice pas encore reçu n'apparaît pas. */
+// Dans l'ordre de la liste de l'utilisateur (26/11/2026) : Europe, puis Amérique et Japon, puis le monde. [série, nom, groupe]
+const Cst_Indices = [['IDX-FCHI', 'CAC 40', 1], ['IDX-SBF120', 'SBF 120', 1], ['IDX-STOXX50E', 'Euro Stoxx 50', 1], ['IDX-FTSE', 'FTSE 100', 1],
+  ['IDX-GDAXI', 'DAX', 1], ['IDX-AEX', 'AEX 25', 1], ['IDX-GSPC', 'S&P 500', 2], ['IDX-DJI', 'Dow Jones', 2], ['IDX-IXIC', 'Nasdaq', 2],
+  ['IDX-N225', 'Nikkei 225', 2], ['IDX-IWDA', 'MSCI World', 3]];
+function Fn_RendreMarches() {
+  const rows = Cst_Indices.map(([id, nom, groupe]) => {
+    const s = Var_Cours.series[id]; if (!s || !s.jours || s.jours.length < 2) return null;
+    const n = s.jours.length - 1, cl = s.clotures[n], pr = s.clotures[n - 1];
+    return cl > 0 && pr > 0 ? { nom, groupe, jour: s.jours[n], cl, v: (cl / pr - 1) * 100 } : null;
+  }).filter(Boolean);
+  $('c-marches').classList.toggle('cache', !rows.length);
+  if (!rows.length) { $('t-marches').innerHTML = ''; return; }
+  const dernier = rows.map(r => r.jour).sort().pop();
+  $('t-marches').innerHTML = '<div style="font-size:12.5px;color:var(--encre-2);margin:4px 0 2px">Séance du ' + Fmt_Jour(dernier) + '</div>'
+    + '<table class="gauche-1"><thead><tr><th>Indice</th><th>Dernier</th><th>Variation</th></tr></thead><tbody>'
+    + rows.map((r, i) => (i && r.groupe !== rows[i - 1].groupe ? '<tr><td colspan="3" style="padding:3px"></td></tr>' : '')
+      + '<tr><td>' + Fn_Esc(r.nom) + (r.jour !== dernier ? ' <span class="muet">(' + Fmt_Jour(r.jour) + ')</span>' : '') + '</td><td>'
+      + Fmt_Nb(r.cl, 2) + '</td><td class="' + Cls_Signe(r.v) + '">' + Fmt_Pct(r.v, 2, true) + '</td></tr>').join('') + '</tbody></table>';
+}
+
 function Fn_GraphePlusValues(c) {
   const zone = $('g-plusvalues'); zone.innerHTML = '';
   const rows = c.positions.slice().sort((a, b) => b.plLat - a.plLat);
@@ -2203,10 +2280,11 @@ function Fn_BrancherLibelles(id) {
 function Fn_Rendre() {
   const c = Fn_Derniere();
   // Les sections s'affichent AVANT d'être dessinées : un graphique dessiné caché n'a pas de largeur.
-  ['c-indicateurs', 'c-evolution', 'c-repartition', 'c-plusvalues', 'c-positions', 'c-analyse'].forEach(id => $(id).classList.toggle('cache', !c));
+  ['c-indicateurs', 'c-evolution', 'c-repartition', 'c-devises-pays', 'c-plusvalues', 'c-positions', 'c-analyse'].forEach(id => $(id).classList.toggle('cache', !c));
   const k = Fn_Calculs();
   Fn_RendreSynthese(k);
-  if (c) { Fn_RendreIndicateurs(k); Fn_GrapheEvolution(k); Fn_GrapheRepartition(c); Fn_GraphePlusValues(c); Fn_RendreEcarts(c); Fn_RendreTableau(c); }
+  Fn_RendreMarches();
+  if (c) { Fn_RendreIndicateurs(k); Fn_GrapheEvolution(k); Fn_GrapheRepartition(c); Fn_GrapheDevisesPays(c); Fn_GraphePlusValues(c); Fn_RendreEcarts(c); Fn_RendreTableau(c); }
   else $('c-ecarts').classList.add('cache');
   Fn_RendreCompte();
   Fn_FiltrerNotes();
@@ -2287,6 +2365,11 @@ function Fn_Avertissements() {
       'Ces actions ont été achetées puis revendues entre deux relevés titres : aucun document ne donne leur ISIN. Sans lui, le robot ne peut pas chercher leurs cours : '
       + 'la valeur du compte à ces dates est estimée, et leur plus-value réalisée n’est pas comptée.',
       'Tape leur ISIN dans l’onglet Relevé si tu le connais. Pour des droits de souscription (« DS »), laisse vide : ils n’ont pas de cours.', 'releve');
+    // Rappel (demande de l'utilisateur, 26/11/2026) : un dividende Bourso sans son relevé de dividendes n'a ni brut ni impôt retenu.
+    if (h.sansCoupon.length) ajout('warn', 'Bourso', h.sansCoupon.length + ' dividende(s) Bourso sans relevé de dividendes : '
+      + h.sansCoupon.map(d => Fn_Esc(d.nom) + ' (' + Fmt_Jour(d.date) + ', net ' + Fmt_Eur(d.net, 2) + ')').join(', '),
+      'Smart connaît le montant net reçu, mais pas le dividende brut ni l’impôt retenu à la source : ils sont sur le relevé de dividendes que Bourso publie pour chaque versement.',
+      'Dans les documents de ton compte-titres Bourso, télécharge le relevé de dividendes de ce versement (PDF) et importe-le dans l’onglet Relevé.', 'releve');
   }
   return out;
 }
