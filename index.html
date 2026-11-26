@@ -57,6 +57,8 @@ h2 { font-size: 16px; margin: 0 0 4px; }
 .carte:not(.aide-ouverte):not(#c-alertes) .note-ok, .carte:not(.aide-ouverte):not(#c-alertes) .note-warn { display: none; }
 .heros-lib { color: var(--encre-2); font-size: 13px; }
 .heros { font-size: 48px; font-weight: 600; line-height: 1.1; margin: 2px 0 10px; }
+.heros-jour { font-size: 18px; font-weight: 600; margin: -6px 0 10px; }
+.heros-jour .quand { font-size: 13px; font-weight: 400; color: var(--muet); margin-left: 4px; }
 .tuiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
 .tuile { background: var(--surface); border: 1px solid var(--bord); border-radius: 10px; padding: 10px 12px; }
 .tuile .lib { color: var(--encre-2); font-size: 12.5px; }
@@ -1824,8 +1826,17 @@ function Fn_RendreSynthese(k) {
   if (k.releve) detX = (k.xirr == null ? 'pas assez de mouvements' : 'en euros, depuis le ' + Fmt_Jour(k.premier) + (k.dureeJours < 365 ? ' — moins d’un an : taux annualisé, peu significatif' : ''))
     + (k.horsEuro.length ? ' · ⚠ ' + k.horsEuro.length + ' versement(s) ou retrait(s) en devise non compté(s) : taux faussé' : '');
   const badges = (v !== 'B' ? '<span class="courtier courtier-d">DEGIRO</span>' : '') + (v !== 'D' ? '<span class="courtier courtier-b">Bourso</span>' : '');
+  /* VARIATION DU JOUR (demande de l'utilisateur, 26/11/2026) : somme des +/− journalières des lignes (celles de DEGIRO et de Bourso,
+     ou recalculées sur la clôture de la veille quand la capture est revalorisée), en % de la valeur des titres de la veille —
+     comme la « P/L Journalière » de DEGIRO. */
+  const lj = k.c.positions.filter(p => p.plJour != null && isFinite(p.plJour));
+  const jour = lj.length ? lj.reduce((s, p) => s + p.plJour, 0) : null, baseJ = jour != null && k.titres != null ? k.titres - jour : null;
+  const pctJ = baseJ > 0 ? jour / baseJ * 100 : null, tsJ = k.c.tsValeur || k.c.ts;
+  const quandJ = Fn_Jour(tsJ) === Fn_Jour(Date.now()) ? 'aujourd’hui' : 'le ' + Fmt_Jour(Fn_Jour(tsJ));
+  const htmlJour = jour == null ? '' : '<div class="heros-jour ' + Cls_Signe(jour) + '">' + Fmt_Signe(jour) + ' (' + Fmt_Pct(pctJ, 2, true) + ')<span class="quand">' + quandJ
+    + (lj.length < k.c.positions.length ? ' · ' + (k.c.positions.length - lj.length) + ' ligne(s) sans variation' : '') + '</span></div>';
   $('v-synthese').innerHTML = '<div class="carte"><div class="heros-lib">' + badges + (v === 'DB' ? 'Valeur nette des deux comptes' : v === 'B' ? 'Valeur nette du compte Bourso' : 'Valeur nette du compte')
-    + '</div><div class="heros">' + Fmt_Eur(k.vl) + '</div>'
+    + '</div><div class="heros">' + Fmt_Eur(k.vl) + '</div>' + htmlJour
     + '<div class="rang" style="align-items:center;margin:0 0 8px"><button id="b-maj-cours">Mettre à jour les cours</button><span class="muet" id="maj-cours-etat">' + Fn_Esc(Var_MajCours) + '</span></div>'
     // Valeur revalorisée au cours de clôture (capture plus ancienne), ou opérations connues depuis la capture.
     + (k.c.estimee ? '<div class="muet">Estimée au ' + Fn_LibCours(k.c.estimee) + ' : pas de capture depuis. Si tu as acheté, vendu ou versé depuis, refais une capture.</div>' : '')
