@@ -58,6 +58,7 @@ h2 { font-size: 16px; margin: 0 0 4px; }
 .heros-lib { color: var(--encre-2); font-size: 13px; }
 .heros { font-size: 48px; font-weight: 600; line-height: 1.1; margin: 2px 0 10px; }
 .heros-jour { font-size: 18px; font-weight: 600; margin: -6px 0 10px; }
+.date-ana { color: var(--encre-2); font-size: 13px; margin-top: 8px; }   /* date d'une analyse : toujours visible (pas repliée par « ? ») */
 .heros-jour .quand { font-size: 13px; font-weight: 400; color: var(--muet); margin-left: 4px; }
 .tuiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
 .tuile { background: var(--surface); border: 1px solid var(--bord); border-radius: 10px; padding: 10px 12px; }
@@ -3621,12 +3622,16 @@ function Fn_LiensRapport(zone) {
 }
 /* EN BAS DE DÉTAIL, si la dernière analyse réussie a moins de 4 jours : l'avis de Claude sur la ligne, puis sa fiche entière.
    La fiche est mise en forme après coup (modules Markdown chargés à la demande) dans #detail-fiche. */
+/* ANALYSES EFFACÉES APRÈS UNE SEMAINE (demande de l'utilisateur, 27/11/2026) : une analyse de plus de 7 jours n'est plus affichée,
+   ni dans Analyse ni dans Détail ; celles gardées dans l'état (analyse complète, analyses par la clé API) en sont retirées. */
+const Cst_DureeAnalyse = 7 * 86400000;
+const Fn_Recente = ts => ts != null && Date.now() - ts <= Cst_DureeAnalyse;
 function Fn_HtmlAvis(isin, nom, symboles) {
   const r = ((Var_Etat.analyseRobot || {}).derniers || []).find(x => x.ok);
-  if (!r || Date.now() - r.ts_demande > 4 * 86400000) return '';
+  if (!r || !Fn_Recente(r.ts_demande)) return '';
   const lu = Fn_AvisAnalyse(r), a = lu.avis.find(x => x.isin === isin), fiche = Fn_FicheAnalyse(lu.texte, isin, nom, symboles);
   if (!a && !fiche) return '';
-  return '<div style="margin-top:16px"><h2>Analyse de Claude</h2><div class="muet">Analyse complète du ' + Fmt_DateHeure(r.ts_demande)
+  return '<div style="margin-top:16px"><h2>Analyse de Claude</h2><div class="date-ana">Analyse complète du ' + Fmt_DateHeure(r.ts_demande)
     + ' · <a href="#" class="voir-analyse">Lire l’analyse entière</a></div>'
     + (a ? '<div class="note" style="margin-top:8px"><b>Avis : ' + Cst_Avis[a.avis] + '</b> — ' + Fn_Esc(a.raison) + '</div>' : '')
     + (fiche ? '<div class="md" id="detail-fiche" data-isin="' + Fn_Esc(isin) + '" data-ts="' + r.ts_demande + '"><h3>' + Fn_Esc(fiche.titre) + '</h3>'
@@ -3694,8 +3699,11 @@ async function Fn_RendreAnalyseRobot() {
   if ($('b-analyse-verifier')) $('b-analyse-verifier').onclick = Fn_SuivreAnalyseRobot;
   const bouton = $('b-analyse-robot');
   bouton.disabled = !!a.attendu; bouton.textContent = a.attendu ? 'Analyse en cours…' : 'Analyse complète par Claude';
+  // Plus d'une semaine : effacée (retirée de l'état, plus affichée).
+  const recents = (a.derniers || []).filter(x => Fn_Recente(x.ts_demande));
+  if (a.derniers && recents.length !== a.derniers.length) { a.derniers = recents; Fn_Sauver(); }
   // Un échec (quota compris) est dit en tête ; le dernier rapport réussi reste affiché dessous.
-  const dernier = (a.derniers || [])[0], r = (a.derniers || []).find(x => x.ok);
+  const dernier = recents[0], r = recents.find(x => x.ok);
   let echec = '';
   if (dernier && !dernier.ok && !a.attendu) {
     const reprise = dernier.quota && dernier.quota.cinq_heures && dernier.quota.cinq_heures.reprise;
@@ -3705,7 +3713,7 @@ async function Fn_RendreAnalyseRobot() {
       : '<div class="note note-crit">Analyse du ' + Fmt_DateHeure(dernier.ts_demande) + ' impossible : ' + Fn_Esc(dernier.erreur) + '</div>';
   }
   if (!r) { zone.innerHTML = echec; return; }
-  const entete = echec + '<div class="muet" style="margin-top:8px">Analyse complète du ' + Fmt_DateHeure(r.ts_demande) + ' · '
+  const entete = echec + '<div class="date-ana">Analyse complète du ' + Fmt_DateHeure(r.ts_demande) + ' · '
     + Fn_Esc((Cst_Modeles[r.modele] || { nom: r.modele }).nom) + ' · ' + Math.max(1, Math.round(r.duree_s / 60)) + ' min · sur votre abonnement Claude</div>';
   const html = await Fn_Markdown(Fn_AvisAnalyse(r).texte);   // sans le bloc des avis, lu à part (onglet Détail)
   zone.innerHTML = entete + html;
@@ -3759,7 +3767,9 @@ function Fn_RendreAnalyseTitre(isin) {
   const jeton = !!Lire_Local(Cst_CleJeton), etat = (Var_Etat.analysesTitres || {})[isin] || {}, nom = Fn_NomSeul(Fn_NomTitre(isin));
   // Première ouverture de la ligne : le dernier résultat est lu sur GitHub, puis la section est refaite.
   if (jeton && !(isin in Var_AnaTitres)) { Var_AnaTitres[isin] = null; Fn_LireAnalyseTitre(isin).then(r => { if (r && Var_Vue.isin === isin) Fn_RendreAnalyseTitre(isin); }); }
-  const r = Var_AnaTitres[isin], bon = r && r.ok ? r : r && r.precedent && r.precedent.ok ? r.precedent : null;
+  // Plus d'une semaine : ni le résultat, ni un échec ne sont affichés (le fichier sur GitHub est simplement ignoré).
+  const lu = Var_AnaTitres[isin], r = lu && Fn_Recente(lu.ts_demande) ? lu : null;
+  const bonLu = lu && lu.ok ? lu : lu && lu.precedent && lu.precedent.ok ? lu.precedent : null, bon = bonLu && Fn_Recente(bonLu.ts_demande) ? bonLu : null;
   let h = '<h2 style="margin-top:18px">Analyse de cette action par Claude</h2>';
   if (etat.attendu) h += '<div class="note">Analyse de ' + Fn_Esc(nom) + ' en cours depuis ' + Fmt_DateHeure(etat.attendu) + ' : Claude cherche et rédige '
     + '(5 à 15 minutes, davantage si une analyse complète passe avant). Le résultat s’affichera ici ; tu peux changer d’action ou fermer la page.'
@@ -3777,7 +3787,7 @@ function Fn_RendreAnalyseTitre(isin) {
   let texte = '';
   if (bon) {
     const lu = Fn_AvisAnalyse(bon), a = lu.avis.find(x => x.isin === isin); texte = lu.texte;
-    h += '<div class="muet" style="margin-top:8px">Analyse du ' + Fmt_DateHeure(bon.ts_demande) + ' · ' + Fn_Esc((Cst_Modeles[bon.modele] || { nom: bon.modele }).nom)
+    h += '<div class="date-ana">Analyse du ' + Fmt_DateHeure(bon.ts_demande) + ' · ' + Fn_Esc((Cst_Modeles[bon.modele] || { nom: bon.modele }).nom)
       + ' · ' + Math.max(1, Math.round(bon.duree_s / 60)) + ' min · sur ton abonnement Claude</div>'
       + (a ? '<div class="note" style="margin-top:8px"><b>Avis : ' + Cst_Avis[a.avis] + '</b> — ' + Fn_Esc(a.raison) + '</div>' : '')
       + '<div class="md" id="ana-titre-texte" data-isin="' + Fn_Esc(isin) + '" data-ts="' + bon.ts_demande + '"><div style="white-space:pre-wrap">' + Fn_Esc(texte) + '</div></div>';
@@ -3905,10 +3915,13 @@ function Fn_RendreAnalyse() {
   Fn_RendreAnalyseRobot();
   $('b-analyse-rapide').onclick = () => Fn_DemanderAnalyse(false);
   $('b-analyse-web').onclick = () => Fn_DemanderAnalyse(true);
-  const a = (Var_Etat.analyses || [])[0];
+  // Plus d'une semaine : effacées de l'état (Fn_Recente).
+  const gardees = (Var_Etat.analyses || []).filter(x => Fn_Recente(x.ts));
+  if (Var_Etat.analyses && gardees.length !== Var_Etat.analyses.length) { Var_Etat.analyses = gardees; Fn_Sauver(); }
+  const a = gardees[0];
   const typeLib = { renforcer: 'Renforcer', alleger: 'Alléger', vendre: 'Vendre', surveiller: 'Surveiller', nouvelle_idee: 'Nouvelle idée' };
   const grav = { important: ['✕', 'important', 'etat-alerte'], attention: ['!', 'attention', 'etat-moyen'], info: ['i', 'info', 'etat-attente'] };
-  $('analyse-resultat').innerHTML = !a ? '' : '<div class="muet" style="margin-top:8px">Analyse du ' + Fmt_DateHeure(a.ts) + ' · ' + (a.web ? 'avec l’actualité' : 'rapide') + ' · '
+  $('analyse-resultat').innerHTML = !a ? '' : '<div class="date-ana">Analyse du ' + Fmt_DateHeure(a.ts) + ' · ' + (a.web ? 'avec l’actualité' : 'rapide') + ' · '
       + Fn_Esc((Cst_Modeles[a.modele] || { nom: a.modele }).nom) + ' · ' + a.duree + ' s · coût ' + Fmt_Dollar(a.cout) + (a.usage.recherches ? ' dont ' + a.usage.recherches + ' recherche(s) web' : '') + '</div>'
     + (a.tronque ? '<div class="note note-warn">Réponse coupée (trop longue).</div>' : '')
     + '<h3>Synthèse</h3><p>' + Fn_Esc(a.rapport.synthese) + '</p>'
