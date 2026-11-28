@@ -1445,14 +1445,19 @@ function Fn_Sauver() {
   return false;
 }
 
-const Fmt_Eur = (v, d) => v == null || !isFinite(v) ? '—' : new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: d || 0, minimumFractionDigits: d || 0 }).format(v);
-const Fmt_Dev = (v, dev) => { try { return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: dev, maximumFractionDigits: 2 }).format(v); } catch (e) { return Fmt_Nb(v, 2) + ' ' + dev; } };
-const Fmt_Pct = (v, d, signe) => v == null || !isFinite(v) ? '—' : (signe && v > 0 ? '+' : '') + new Intl.NumberFormat('fr-FR', { maximumFractionDigits: d == null ? 1 : d, minimumFractionDigits: d == null ? 1 : d }).format(v) + ' %';
-const Fmt_Nb = (v, d) => v == null ? '—' : new Intl.NumberFormat('fr-FR', { maximumFractionDigits: d == null ? 2 : d }).format(v);
-const Fmt_Date = ts => ts == null ? '—' : new Intl.DateTimeFormat('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' }).format(new Date(ts));
+/* FORMATEURS RÉUTILISÉS (lenteur sur le téléphone, 28/11/2026) : un Intl.NumberFormat ou DateTimeFormat coûte cher à créer ;
+   chacun est créé une fois par jeu d'options, puis gardé. */
+const Var_Formats = new Map();
+const Fn_Formateur = (Cls, o) => { const k = Cls.name + JSON.stringify(o); let f = Var_Formats.get(k); if (!f) { f = new Cls('fr-FR', o); Var_Formats.set(k, f); } return f; };
+const Fn_NF = o => Fn_Formateur(Intl.NumberFormat, o), Fn_DF = o => Fn_Formateur(Intl.DateTimeFormat, o);
+const Fmt_Eur = (v, d) => v == null || !isFinite(v) ? '—' : Fn_NF({ style: 'currency', currency: 'EUR', maximumFractionDigits: d || 0, minimumFractionDigits: d || 0 }).format(v);
+const Fmt_Dev = (v, dev) => { try { return Fn_NF({ style: 'currency', currency: dev, maximumFractionDigits: 2 }).format(v); } catch (e) { return Fmt_Nb(v, 2) + ' ' + dev; } };
+const Fmt_Pct = (v, d, signe) => v == null || !isFinite(v) ? '—' : (signe && v > 0 ? '+' : '') + Fn_NF({ maximumFractionDigits: d == null ? 1 : d, minimumFractionDigits: d == null ? 1 : d }).format(v) + ' %';
+const Fmt_Nb = (v, d) => v == null ? '—' : Fn_NF({ maximumFractionDigits: d == null ? 2 : d }).format(v);
+const Fmt_Date = ts => ts == null ? '—' : Fn_DF({ day: '2-digit', month: '2-digit', year: '2-digit' }).format(new Date(ts));
 const Fmt_Jour = iso => iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(2, 4) : '—';
-const Fmt_DateHeure = ts => ts == null ? '—' : new Intl.DateTimeFormat('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(ts));
-const Fmt_Compact = v => (Math.abs(v) >= 10000 ? new Intl.NumberFormat('fr-FR', { notation: 'compact', maximumFractionDigits: 1 }).format(v) : new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 0 }).format(v)) + ' €';
+const Fmt_DateHeure = ts => ts == null ? '—' : Fn_DF({ day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(ts));
+const Fmt_Compact = v => (Math.abs(v) >= 10000 ? Fn_NF({ notation: 'compact', maximumFractionDigits: 1 }).format(v) : Fn_NF({ maximumFractionDigits: 0 }).format(v)) + ' €';
 const Fmt_Signe = v => (v > 0 ? '+' : '') + Fmt_Eur(v);
 const Cls_Signe = v => v == null ? '' : v >= 0 ? 'pos' : 'neg';
 
@@ -2288,23 +2293,27 @@ function Fn_BrancherLibelles(id) {
 }
 
 /* ---------- ensemble ---------- */
+/* UN ONGLET À LA FOIS (lenteur sur le téléphone, 28/11/2026) : seul l'onglet affiché est dessiné ; changer d'onglet le dessine.
+   Toujours : l'en-tête et la synthèse, le choix du compte, les notes, les avertissements (pastille ⚠). Réglages : tout. */
 function Fn_Rendre() {
-  const c = Fn_Derniere();
+  const c = Fn_Derniere(), voir = o => Var_Onglet === o || Var_Onglet === 'reglages';
   // Les sections s'affichent AVANT d'être dessinées : un graphique dessiné caché n'a pas de largeur.
   ['c-indicateurs', 'c-evolution', 'c-repartition', 'c-plusvalues', 'c-positions', 'c-analyse'].forEach(id => $(id).classList.toggle('cache', !c));
   const k = Fn_Calculs();
   Fn_RendreSynthese(k);
-  Fn_RendreMarches();
-  if (c) { Fn_RendreIndicateurs(k); Fn_GrapheEvolution(k); Fn_GrapheRepartition(c); Fn_GrapheDevisesPays(c); Fn_GraphePlusValues(c); Fn_RendreEcarts(c); Fn_RendreTableau(c); }
-  else $('c-ecarts').classList.add('cache');
+  if (voir('accueil')) Fn_RendreMarches();
+  if (c) {
+    if (voir('accueil')) { Fn_RendreIndicateurs(k); Fn_GrapheRepartition(c); Fn_GrapheDevisesPays(c); Fn_GraphePlusValues(c); Fn_RendreTableau(c); }
+    if (voir('evolution')) Fn_GrapheEvolution(k);
+    if (voir('pru')) Fn_RendreEcarts(c);
+  } else $('c-ecarts').classList.add('cache');
   Fn_RendreCompte();
   Fn_FiltrerNotes();
   Fn_RendreAlertes();
-  Fn_RendreCours();
-  if (c) Fn_RendreAnalyse();
-  Fn_RendreRevenus();
-  Fn_RendreReleve();
-  Fn_RendreReleveBourso();
+  if (voir('detail')) Fn_RendreCours();
+  if (c && voir('analyse')) Fn_RendreAnalyse();
+  if (voir('revenus')) Fn_RendreRevenus();
+  if (voir('releve')) { Fn_RendreReleve(); Fn_RendreReleveBourso(); }
   const n = Var_Etat.captures.length;
   Fn_MajSauts();
   $('captures-etat').textContent = n ? n + ' capture(s) enregistrée(s), du ' + Fmt_Date(Var_Etat.captures[0].ts) + ' au ' + Fmt_Date(Var_Etat.captures[n - 1].ts) + '.' : 'Aucune capture enregistrée.';
@@ -2854,7 +2863,7 @@ function Fn_HtmlEnteteTitre(isin, pos, c) {
     prix = pos.cours; dev = pos.dev; quand = 'Capture du ' + Fmt_DateHeure(tsCap); ref = null;
     if (s) { const jc = Fn_Jour(tsCap); for (let i = s.jours.length - 1; i >= 0; i--) if (s.jours[i] < jc) { ref = s.clotures[i]; break; } }
   }
-  const dec = prix != null && Math.abs(prix) < 1 ? 4 : 2, f = v => new Intl.NumberFormat('fr-FR', { minimumFractionDigits: dec, maximumFractionDigits: dec }).format(Math.abs(v));
+  const dec = prix != null && Math.abs(prix) < 1 ? 4 : 2, f = v => Fn_NF({ minimumFractionDigits: dec, maximumFractionDigits: dec }).format(Math.abs(v));
   const va = prix != null && ref ? prix - ref : null, vp = va != null ? va / ref * 100 : null;
   return '<div class="entete-titre"><div class="logo-titre" aria-hidden="true" style="background:hsl(' + teinte + ' 55% 40%)">' + Fn_Esc(Fn_Initiales(nom)) + '</div>'
     + '<div style="min-width:0"><div class="nom">' + Fn_Esc(nom) + '</div>'
@@ -3861,7 +3870,7 @@ function Fn_EstimationAnalyse(web, m) {
   const haut = web ? (entree * 8 + 120000) * p.e / 1e6 + 20000 * p.s / 1e6 + 8 * Cst_PrixRecherche : entree * p.e / 1e6 + 12000 * p.s / 1e6;
   return [bas, haut];
 }
-const Fmt_Dollar = v => new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(v);
+const Fmt_Dollar = v => Fn_NF({ style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(v);
 function Fn_CoutAnalyse(u, m) {
   const p = Cst_Modeles[m] || Cst_Modeles['claude-opus-5-5'];
   return (u.input_tokens * p.e + u.output_tokens * p.s + (u.cache_read_input_tokens || 0) * p.lc + (u.cache_creation_input_tokens || 0) * p.ec) / 1e6 + (u.recherches || 0) * Cst_PrixRecherche;
