@@ -146,10 +146,14 @@ select { max-width: 100%; }
 .puce[aria-pressed="true"] { color: var(--encre); border-color: var(--bord); background: var(--surface-2); font-weight: 600; }
 .multiple .val { font-size: 15px; font-weight: 600; }
 /* Onglets : barre collée en haut, qui s'efface quand on fait défiler vers le bas et revient dès qu'on remonte. */
-.onglets { position: sticky; top: 0; z-index: 20; display: flex; overflow-x: auto; scrollbar-width: none; margin: 8px -16px 4px; padding: 6px 8px;
-  background: var(--plan); border-bottom: 1px solid var(--grille); transition: transform .2s ease; }
+.barre { position: sticky; top: 0; z-index: 20; margin: 8px -16px 4px; background: var(--plan); border-bottom: 1px solid var(--grille); transition: transform .2s ease; }
+.barre.cachee { transform: translateY(-110%); }
+.onglets { display: flex; overflow-x: auto; scrollbar-width: none; padding: 6px 8px; }
 .onglets::-webkit-scrollbar { display: none; }
-.onglets.cachee { transform: translateY(-110%); }
+/* Sauts : boutons qui mènent directement à une carte de l'onglet. */
+.sauts { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 8px; }
+.sauts button { font: inherit; font-size: 12.5px; color: var(--serie-1); background: var(--surface); border: 1px solid var(--bord); border-radius: 999px;
+  padding: 4px 10px; cursor: pointer; }
 .onglets button { flex: 1 0 auto; font: inherit; font-size: 13px; color: var(--encre-2); background: none; border: 0; border-radius: 8px; padding: 8px 5px; cursor: pointer; }
 .onglets button[aria-selected="true"] { background: var(--serie-1); color: #fff; font-weight: 600; }
 .hors-onglet { display: none !important; }
@@ -162,6 +166,7 @@ table.gauche-1 th:first-child, table.gauche-1 td:first-child { text-align: left;
 <main>
   <h1>Portefeuille</h1>
   <div class="sous" id="entete">Aucune capture reçue.</div>
+  <div class="barre" id="barre">
   <nav class="onglets" id="onglets" role="tablist" aria-label="Rubriques">
     <button type="button" role="tab" data-onglet="accueil">Accueil</button>
     <button type="button" role="tab" data-onglet="evolution">Évolution</button>
@@ -173,6 +178,15 @@ table.gauche-1 th:first-child, table.gauche-1 td:first-child { text-align: left;
     <button type="button" role="tab" data-onglet="alertes" aria-label="Avertissements" title="Avertissements">⚠<span class="pastille cache" id="nb-alertes"></span></button>
     <button type="button" role="tab" data-onglet="reglages" aria-label="Réglages" title="Réglages">⚙</button>
   </nav>
+  <nav class="sauts" id="sauts" aria-label="Aller à">
+    <button type="button" data-cible="v-synthese">Synthèse</button>
+    <button type="button" data-cible="c-marches">Marchés</button>
+    <button type="button" data-cible="c-indicateurs">Indicateurs</button>
+    <button type="button" data-cible="c-repartition">Répartition</button>
+    <button type="button" data-cible="c-plusvalues">Plus-values</button>
+    <button type="button" data-cible="c-positions">Positions</button>
+  </nav>
+  </div>
   <div class="choix cache" id="b-compte" role="group" aria-label="Compte affiché"></div>
   <div id="compte-note"></div>
   <div id="alerte-stockage"></div>
@@ -240,15 +254,11 @@ table.gauche-1 th:first-child, table.gauche-1 td:first-child { text-align: left;
   </section>
 
   <section class="carte" id="c-repartition" data-onglet="accueil">
-    <h2>Répartition par ligne</h2>
-    <div class="muet">Part de chaque titre dans la valeur des titres, de la plus grosse à la plus petite.</div>
+    <h2>Répartition</h2>
+    <div class="muet">Part de la valeur des titres : par ligne, de la plus grosse à la plus petite ; par devise, celle de la cotation ; par pays, celui
+      de l’ISIN (le pays où le titre est émis, pas toujours celui de son activité : ArcelorMittal est au Luxembourg, un fonds souvent en Irlande).</div>
+    <h2 style="margin-top:10px;font-size:14px">Par ligne</h2>
     <div class="graphe" id="g-repartition"></div>
-  </section>
-
-  <section class="carte" id="c-devises-pays" data-onglet="accueil">
-    <h2>Répartition par devise et par pays</h2>
-    <div class="muet">Part de la valeur des titres. La devise est celle de la cotation ; le pays, celui de l’ISIN (le pays où le titre est émis, pas
-      toujours celui de son activité : ArcelorMittal est au Luxembourg, un fonds souvent en Irlande).</div>
     <h2 style="margin-top:10px;font-size:14px">Par devise</h2>
     <div class="graphe" id="g-devises"></div>
     <h2 style="margin-top:10px;font-size:14px">Par pays</h2>
@@ -2281,7 +2291,7 @@ function Fn_BrancherLibelles(id) {
 function Fn_Rendre() {
   const c = Fn_Derniere();
   // Les sections s'affichent AVANT d'être dessinées : un graphique dessiné caché n'a pas de largeur.
-  ['c-indicateurs', 'c-evolution', 'c-repartition', 'c-devises-pays', 'c-plusvalues', 'c-positions', 'c-analyse'].forEach(id => $(id).classList.toggle('cache', !c));
+  ['c-indicateurs', 'c-evolution', 'c-repartition', 'c-plusvalues', 'c-positions', 'c-analyse'].forEach(id => $(id).classList.toggle('cache', !c));
   const k = Fn_Calculs();
   Fn_RendreSynthese(k);
   Fn_RendreMarches();
@@ -2296,6 +2306,7 @@ function Fn_Rendre() {
   Fn_RendreReleve();
   Fn_RendreReleveBourso();
   const n = Var_Etat.captures.length;
+  Fn_MajSauts();
   $('captures-etat').textContent = n ? n + ' capture(s) enregistrée(s), du ' + Fmt_Date(Var_Etat.captures[0].ts) + ' au ' + Fmt_Date(Var_Etat.captures[n - 1].ts) + '.' : 'Aucune capture enregistrée.';
 }
 /* AVERTISSEMENTS (onglet ⚠) : tout ce qui est technique ou demande une action, rassemblé au lieu d'être dispersé dans les
@@ -2411,7 +2422,7 @@ function Fn_Onglet(nom) {
   Var_Onglet = nom;
   document.querySelectorAll('#onglets [data-onglet]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.onglet === nom)));
   document.querySelectorAll('main > [data-onglet]').forEach(s => s.classList.toggle('hors-onglet', s.dataset.onglet !== nom));
-  $('onglets').classList.remove('cachee');
+  $('barre').classList.remove('cachee');
   window.scrollTo(0, 0);
   Fn_Rendre();
 }
@@ -2419,11 +2430,21 @@ document.querySelectorAll('#onglets [data-onglet]').forEach(b => { b.onclick = (
 // La barre s'efface quand on fait défiler vers le bas pour lire, et revient dès qu'on remonte un peu.
 let Var_DernierY = window.scrollY;
 window.addEventListener('scroll', () => {
-  const y = window.scrollY, nav = $('onglets');
+  const y = window.scrollY, nav = $('barre');
   if (y < 60 || y < Var_DernierY - 8) nav.classList.remove('cachee');
   else if (y > Var_DernierY + 8) nav.classList.add('cachee');
   if (Math.abs(y - Var_DernierY) > 8) Var_DernierY = y;
 }, { passive: true });
+/* SAUTS (demande de l'utilisateur, 28/11/2026) : dans l'Accueil, un bouton par carte. En descendant, la barre s'efface : la carte
+   arrive en haut de l'écran ; en remontant, la barre revient : la carte arrive juste dessous. */
+document.querySelectorAll('#sauts [data-cible]').forEach(b => { b.onclick = () => {
+  const y = $(b.dataset.cible).getBoundingClientRect().top + window.scrollY, monte = y < window.scrollY;
+  window.scrollTo({ top: Math.max(0, y - (monte ? $('barre').offsetHeight : 0) - 8), behavior: 'smooth' });
+}; });
+function Fn_MajSauts() {
+  $('sauts').classList.toggle('cache', Var_Onglet !== 'accueil');
+  document.querySelectorAll('#sauts [data-cible]').forEach(b => { const s = $(b.dataset.cible); b.classList.toggle('cache', s.classList.contains('cache') || !s.textContent.trim()); });
+}
 const lireFichier = f => new Promise((ok, ko) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = ko; r.readAsText(f, 'utf-8'); });
 
 $('b-coller').onclick = () => $('zone-collage').classList.toggle('cache');
